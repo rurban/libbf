@@ -26,7 +26,7 @@
 #include <inttypes.h>
 #include <math.h>
 #include <string.h>
-#include <malloc.h>
+/*#include <malloc.h>*/
 #include <sys/time.h>
 
 #include "libbf.h"
@@ -39,6 +39,9 @@
 
 /* number of bits per base 10 digit */
 #define BITS_PER_DIGIT 3.32192809488736234786
+
+static int64_t time_start;
+int verbose;
 
 void *bf_realloc(void *ptr, size_t size)
 {
@@ -103,15 +106,11 @@ static void chud_bs(bf_t *P, bf_t *Q, bf_t *G, int64_t a, int64_t b, int need_g,
         if (need_g)
             bf_mul(G, G, &G2, prec, BF_RNDN);
         bf_delete(&G2);
-#if 0
-        printf("%" PRId64 "-%" PRId64 " limbs: P=%" PRId64 " Q=%" PRId64 " G=%" PRId64 "\n",
-               a, b, P->len, Q->len, G->len);
-#endif
+        if (verbose > 1)
+            printf("%" PRId64 "-%" PRId64 " limbs: P=%" PRId64 " Q=%" PRId64 " G=%" PRId64 "\n",
+                   a, b, P->len, Q->len, G->len);
     }
 }
-
-static int64_t time_start;
-int verbose;
 
 static int64_t get_clock_msec(void)
 {
@@ -193,7 +192,7 @@ int main(int argc, char **argv)
             dec_output = 0;
             arg_idx++;
         } else if (!strcmp(argv[arg_idx], "-v")) {
-            verbose = 1;
+            verbose++;
             arg_idx++;
         } else {
             break;
