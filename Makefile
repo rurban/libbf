@@ -26,8 +26,13 @@
 CONFIG_AVX2=y
 # Enable profiling with gprof
 #CONFIG_PROFILE=y
-# Enable the MPFR library to do tests and benchmarks
-CONFIG_MPFR=y
+# compile the bftest utility to do regression tests and benchmarks. Must have
+# the MPFR and MPDecimal libraries
+#CONFIG_BFTEST=y
+# 32 bit compilation
+#CONFIG_M32=y
+
+#CONFIG_ASAN=y
 
 ifdef CONFIG_WIN32
 CROSS_PREFIX=x86_64-w64-mingw32-
@@ -37,7 +42,7 @@ EXE:=
 endif
 
 CC=$(CROSS_PREFIX)gcc
-CFLAGS=-Wall -Werror -g $(PROFILE) -MMD
+CFLAGS=-Wall -g $(PROFILE) -MMD
 CFLAGS+=-O2
 CFLAGS+=-flto
 #CFLAGS+=-Os
@@ -48,13 +53,18 @@ LDFLAGS+=-p
 else
 #LDFLAGS+=-s # strip output
 endif
-#CFLAGS+=-m32
-#LDFLAGS+=-m32
+ifdef CONFIG_ASAN
+CFLAGS+=-fsanitize=address
+LDFLAGS+=-fsanitize=address
+endif
 LIBS=-lm
 
 PROGS+=bfbench$(EXE) tinypi$(EXE)
-ifdef CONFIG_MPFR
+ifdef CONFIG_BFTEST
 PROGS+=bftest$(EXE)
+ifdef CONFIG_M32
+PROGS+=bftest32$(EXE)
+endif
 endif
 ifdef CONFIG_AVX2
 PROGS+=bfbench-avx2$(EXE) tinypi-avx2$(EXE)
@@ -70,12 +80,17 @@ tinypi-avx2$(EXE): tinypi.avx2.o libbf.avx2.o cutils.avx2.o
 
 BFTEST_LIBS:=$(LIBS)
 
-ifdef CONFIG_MPFR
+ifdef CONFIG_BFTEST
 BFTEST_LIBS:=-lmpfr -lgmp $(BFTEST_LIBS)
 bfbench.o bfbench.avx2.o: CFLAGS+=-DCONFIG_MPFR
 
 bftest$(EXE): bftest.o libbf.o cutils.o softfp.o
-	$(CC) $(LDFLAGS) -o $@ $^ $(BFTEST_LIBS)
+	$(CC) $(LDFLAGS) -o $@ $^ -lmpdec $(BFTEST_LIBS)
+
+ifdef CONFIG_M32
+bftest32$(EXE): bftest.m32.o libbf.m32.o cutils.m32.o softfp.m32.o
+	$(CC) $(LDFLAGS) -m32 -o $@ $^ -lmpdec $(BFTEST_LIBS)
+endif
 endif
 
 bfbench$(EXE): bfbench.o libbf.o cutils.o
@@ -107,6 +122,9 @@ endif
 
 %.o: %.c
 	$(CC) $(CFLAGS) -c -o $@ $<
+
+%.m32.o: %.c
+	$(CC) -m32 $(CFLAGS) -c -o $@ $<
 
 %.avx2.o: %.c
 	$(CC) $(CFLAGS) -mavx -mavx2 -mfma -mbmi2 -c -o $@ $<

@@ -26,7 +26,6 @@
 #include <inttypes.h>
 #include <math.h>
 #include <string.h>
-#include <malloc.h>
 #include <sys/time.h>
 
 #include "libbf.h"
@@ -40,7 +39,9 @@
 /* number of bits per base 10 digit */
 #define BITS_PER_DIGIT 3.32192809488736234786
 
-void *bf_realloc(void *ptr, size_t size)
+static bf_context_t bf_ctx;
+
+static void *my_bf_realloc(void *opaque, void *ptr, size_t size)
 {
     return realloc(ptr, size);
 }
@@ -53,8 +54,8 @@ static void chud_bs(bf_t *P, bf_t *Q, bf_t *G, int64_t a, int64_t b, int need_g,
     if (a == (b - 1)) {
         bf_t T0, T1;
         
-        bf_init(&T0);
-        bf_init(&T1);
+        bf_init(&bf_ctx, &T0);
+        bf_init(&bf_ctx, &T1);
         bf_set_ui(G, 2 * b - 1);
         bf_mul_ui(G, G, 6 * b - 1, prec, BF_RNDN);
         bf_mul_ui(G, G, 6 * b - 5, prec, BF_RNDN);
@@ -80,9 +81,9 @@ static void chud_bs(bf_t *P, bf_t *Q, bf_t *G, int64_t a, int64_t b, int need_g,
     } else {
         bf_t P2, Q2, G2;
         
-        bf_init(&P2);
-        bf_init(&Q2);
-        bf_init(&G2);
+        bf_init(&bf_ctx, &P2);
+        bf_init(&bf_ctx, &Q2);
+        bf_init(&bf_ctx, &G2);
 
         c = (a + b) / 2;
         chud_bs(P, Q, G, a, c, 1, prec);
@@ -147,8 +148,8 @@ static void pi_chud(bf_t *Q, int64_t prec)
     n = (int64_t)ceil(prec / CHUD_BITS_PER_TERM) + 10;
     prec1 = prec + 32;
 
-    bf_init(&P);
-    bf_init(&G);
+    bf_init(&bf_ctx, &P);
+    bf_init(&bf_ctx, &G);
 
     step_start("chud_bs");
     chud_bs(&P, Q, &G, 0, n, 0, prec1);
@@ -162,9 +163,9 @@ static void pi_chud(bf_t *Q, int64_t prec)
     step_end();
  
     step_start("sqrt");
-    bf_set_ui(&P, CHUD_C / 64);
-    bf_rsqrt(&G, &P, prec1);
-    bf_mul_ui(&G, &G, (uint64_t)CHUD_C * CHUD_C / (8 * 12), prec1, BF_RNDF);
+    bf_set_ui(&P, CHUD_C);
+    bf_sqrt(&G, &P, prec1, BF_RNDF);
+    bf_mul_ui(&G, &G, (uint64_t)CHUD_C / 12, prec1, BF_RNDF);
     step_end();
 
     step_start("final mul");
@@ -220,18 +221,19 @@ int main(int argc, char **argv)
     /* we add more bits to reduce the probability of bad rounding for
        the last digits */
     prec = n_bits + 32;
-    bf_init(&PI);
+    bf_context_init(&bf_ctx, my_bf_realloc, NULL);
+    bf_init(&bf_ctx, &PI);
 
     pi_chud(&PI, prec);
 
     if (dec_output) {
         step_start("base conversion");
-        digits_len = bf_ftoa(&digits, &PI, 10, n_digits + 1,
+        digits = bf_ftoa(&digits_len, &PI, 10, n_digits + 1,
                              BF_FTOA_FORMAT_FIXED | BF_RNDZ);
         step_end();
     } else {
-        digits_len = bf_ftoa(&digits, &PI, 16, n_bits / 4,
-                             BF_FTOA_FORMAT_FIXED | BF_RNDZ);
+        digits = bf_ftoa(&digits_len, &PI, 16, n_bits / 4,
+                         BF_FTOA_FORMAT_FIXED | BF_RNDZ);
     }
     ti_tot = get_clock_msec() - ti_tot;
     if (verbose) {
@@ -249,5 +251,6 @@ int main(int argc, char **argv)
     }
     free(digits);
     bf_delete(&PI);
+    bf_context_end(&bf_ctx);
     return 0;
 }

@@ -35,8 +35,14 @@
 #include "libbf.h"
 #include "cutils.h"
 #include "softfp.h"
+#include "mpdecimal.h"
 
 typedef enum {
+    /* low level operations */
+    BF_OP_MP_SQRTREM,
+    BF_OP_MP_RECIP,
+
+    /* binary floating point */
     BF_OP_MUL,
     BF_OP_ADD,
     BF_OP_SUB,
@@ -45,11 +51,9 @@ typedef enum {
     BF_OP_CMP_EQ,
     BF_OP_CMP_LT,
     BF_OP_CMP_LE,
-    BF_OP_RECIP,
     BF_OP_DIV,
     BF_OP_FMOD,
     BF_OP_REM,
-    BF_OP_RSQRT,
     BF_OP_SQRT,
     BF_OP_OR,
     BF_OP_XOR,
@@ -69,10 +73,22 @@ typedef enum {
     BF_OP_ASIN,
     BF_OP_ACOS,
     BF_OP_POW,
+
+    /* decimal floating point */
+    BF_OP_ADD_DEC,
+    BF_OP_MUL_DEC,
+    BF_OP_DIV_DEC,
+    BF_OP_SQRT_DEC,
+    BF_OP_FMOD_DEC,
+    BF_OP_DIVREM_DEC,
+    BF_OP_RINT_DEC,
+
     BF_OP_COUNT,
 } MPFTestOPEnum;
 
 const char *op_str[BF_OP_COUNT] = {
+    "mp_sqrtrem",
+    "mp_recip",
     "mul",
     "add",
     "sub",
@@ -81,11 +97,9 @@ const char *op_str[BF_OP_COUNT] = {
     "cmp_eq",
     "cmp_lt",
     "cmp_le",
-    "recip",
     "div",
     "fmod",
     "rem",
-    "rsqrt",
     "sqrt",
     "or",
     "xor",
@@ -105,42 +119,76 @@ const char *op_str[BF_OP_COUNT] = {
     "asin",
     "acos",
     "pow",
+
+    "add_dec",
+    "mul_dec",
+    "div_dec",
+    "sqrt_dec",
+    "fmod_dec",
+    "divrem_dec",
+    "rint_dec",
 };
 
-const char *rnd_str[6] = {
+const char *rnd_str[7] = {
     "N",
     "Z",
     "D",
     "U",
     "NA",
+    "A",
     "F",
 };
 
 #define SPECIAL_COUNT 7
 
-void *bf_realloc(void *ptr, size_t size)
+static bf_context_t bf_ctx;
+
+static void *my_bf_realloc(void *opaque, void *ptr, size_t size)
 {
     return realloc(ptr, size);
+}
+
+int mp_cmp(const limb_t *taba, size_t na, const limb_t *tabb, size_t nb)
+{
+    slimb_t n, i;
+    limb_t a, b;
+    
+    n = na;
+    if (nb > n)
+        n = nb;
+    for(i = n - 1; i >= 0; i--) {
+        if (i < na)
+            a = taba[i];
+        else
+            a = 0;
+        if (i < nb)
+            b = tabb[i];
+        else
+            b = 0;
+        if (a != b) {
+            if (a < b)
+                return -1;
+            else
+                return 1;
+        }
+    }
+    return 0;
 }
 
 static void set_special(bf_t *a, int idx)
 {
     switch(idx) {
     case 0:
-        bf_set_ui(a, 0);
+        bf_set_zero(a, 0);
         break;
     case 1:
-        bf_set_ui(a, 0);
-        a->sign = 1; /* -0 */
+        bf_set_zero(a, 1); /* -0 */
         break;
     case 2:
-        bf_set_si(a, 0);
-        a->expn = BF_EXP_INF;
+        bf_set_inf(a, 0);
         break;
     case 3:
-        bf_set_si(a, 0);
-        a->expn = BF_EXP_INF;
-        a->sign = 1;
+        bf_set_inf(a, 1);
         break;
     case 4:
         bf_set_si(a, 1);
@@ -150,6 +198,35 @@ static void set_special(bf_t *a, int idx)
         break;
     case 6:
         bf_set_nan(a);
+        break;
+    default:
+        abort();
+    }
+}
+
+static void set_special_dec(bfdec_t *a, int idx)
+{
+    switch(idx) {
+    case 0:
+        bfdec_set_zero(a, 0);
+        break;
+    case 1:
+        bfdec_set_zero(a, 1); /* -0 */
+        break;
+    case 2:
+        bfdec_set_inf(a, 0);
+        break;
+    case 3:
+        bfdec_set_inf(a, 1);
+        break;
+    case 4:
+        bfdec_set_si(a, 1);
+        break;
+    case 5:
+        bfdec_set_si(a, -1);
+        break;
+    case 6:
+        bfdec_set_nan(a);
         break;
     default:
         abort();
@@ -174,13 +251,12 @@ static inline uint64_t mp_random64(mp_randstate_t *s)
 }
 
 /* random number between 0 and 1 with large sequences of identical bits */
-static void bf_rrandom(bf_t *a, limb_t prec, mp_randstate_t *state)
+static void mp_rrandom(limb_t *tab, limb_t prec, mp_randstate_t *state)
 {
     slimb_t n, max_run_len, cur_len, j, len, bit_index, nb_bits;
     int cur_state, m;
     
     n = (prec + LIMB_BITS - 1) / LIMB_BITS;
-
     /* same idea as GMP. It would be probably better to use a non
        uniform law */
     m = mp_random64(state) % 4 + 1;
@@ -189,15 +265,14 @@ static void bf_rrandom(bf_t *a, limb_t prec, mp_randstate_t *state)
     cur_len = mp_random64(state) % max_run_len + 1;
     nb_bits = n * LIMB_BITS;
     
-    bf_resize(a, n);
-    memset(a->tab, 0, sizeof(limb_t) * n);
+    memset(tab, 0, sizeof(limb_t) * n);
     bit_index = nb_bits - prec;
     while (bit_index < nb_bits) {
         len = bf_min(cur_len, nb_bits - bit_index);
         if (cur_state) {
             /* XXX: inefficient */
             for(j = 0; j < len; j++) {
-                a->tab[bit_index >> LIMB_LOG2_BITS] |= (limb_t)1 << (bit_index & (LIMB_BITS - 1));
+                tab[bit_index >> LIMB_LOG2_BITS] |= (limb_t)1 << (bit_index & (LIMB_BITS - 1));
                 bit_index++;
             }
         }
@@ -208,6 +283,15 @@ static void bf_rrandom(bf_t *a, limb_t prec, mp_randstate_t *state)
             cur_state ^= 1;
         }
     }
+}
+
+static void bf_rrandom(bf_t *a, limb_t prec, mp_randstate_t *state)
+{
+    slimb_t n;
+    
+    n = (prec + LIMB_BITS - 1) / LIMB_BITS;
+    bf_resize(a, n);
+    mp_rrandom(a->tab, prec, state);
     a->sign = 0;
     a->expn = 0;
     bf_normalize_and_round(a, prec, BF_RNDZ);
@@ -218,6 +302,71 @@ static void bf_rrandom_large(bf_t *a, limb_t prec, mp_randstate_t *s)
     limb_t prec1;
     prec1 = mp_random64(s) % (2 * prec) + 1;
     bf_rrandom(a, prec1, s);
+    a->sign = mp_random64(s) & 1;
+}
+
+/* random number between 0 and 1 with large sequences zeros, nines or
+   random digits */
+static void bfdec_rrandom(bfdec_t *a, limb_t prec, mp_randstate_t *state)
+{
+    slimb_t n, max_run_len, cur_len, j, len, digit_index, nb_digits;
+    int cur_state, m;
+    
+    n = (prec + LIMB_DIGITS - 1) / LIMB_DIGITS;
+    bfdec_resize(a, n);
+    
+    /* same idea as GMP. It would be probably better to use a non
+       uniform law */
+    m = mp_random64(state) % 4 + 1;
+    max_run_len = bf_max(prec / m, 1);
+    cur_state = mp_random64(state) % 3;
+    cur_len = mp_random64(state) % max_run_len + 1;
+    nb_digits = n * LIMB_DIGITS;
+    
+    memset(a->tab, 0, sizeof(limb_t) * n);
+    digit_index = nb_digits - prec;
+    while (digit_index < nb_digits) {
+        len = bf_min(cur_len, nb_digits - digit_index);
+        switch(cur_state) {
+        case 0:
+             /* zeros */
+            break;
+        case 1:
+            /* nines */
+            for(j = 0; j < len; j++) {
+                a->tab[digit_index / LIMB_DIGITS] +=
+                    9 * mp_pow_dec[digit_index % LIMB_DIGITS];
+                digit_index++;
+            }
+            break;
+        case 2:
+            /* random */
+            for(j = 0; j < len; j++) {
+                a->tab[digit_index / LIMB_DIGITS] +=
+                    (mp_random64(state) % 10) *
+                    mp_pow_dec[digit_index % LIMB_DIGITS];
+                digit_index++;
+            }
+            break;
+        }
+        digit_index += len;
+        cur_len -= len;
+        if (cur_len == 0) {
+            cur_len = mp_random64(state) % max_run_len + 1;
+            cur_state ^= 1;
+        }
+    }
+    a->sign = 0;
+    a->expn = 0;
+    bfdec_normalize_and_round(a, prec, BF_RNDZ);
+}
+
+static void bfdec_rrandom_large(bfdec_t *a, limb_t prec, mp_randstate_t *s)
+{
+    limb_t prec1;
+    
+    prec1 = mp_random64(s) % (2 * prec) + 1;
+    bfdec_rrandom(a, prec1, s);
     a->sign = mp_random64(s) & 1;
 }
 
@@ -309,6 +458,7 @@ static mpfr_rnd_t mpfr_get_rnd_mode(bf_rnd_t rnd_mode)
         MPFR_RNDD,
         MPFR_RNDU,
         MPFR_RNDNA,
+        MPFR_RNDA,
     };
     return rnd_mode_tab[rnd_mode];
 }
@@ -326,8 +476,8 @@ static void bf_to_mpfr(mpfr_t a, const bf_t *a1)
 {
     char *str;
     //    bf_print_str("a", a1);
-    bf_ftoa(&str, a1, 16, BF_PREC_INF, BF_RNDZ | BF_FTOA_FORMAT_FREE |
-            BF_FTOA_ADD_PREFIX);
+    str = bf_ftoa(NULL, a1, 16, BF_PREC_INF, BF_RNDZ | BF_FTOA_FORMAT_FREE |
+                  BF_FTOA_ADD_PREFIX);
     //    printf("mpfr a=%s\n", str);
     mpfr_set_str(a, str, 0, MPFR_RNDZ);
     free(str);
@@ -351,7 +501,12 @@ int mpfr_exec_op(MPFTestOPEnum op, bf_t *r1, bf_t *a1, bf_t *b1,
     
     mpfr_init2(a, bf_max(a1->len, 1) * LIMB_BITS);
     mpfr_init2(b, bf_max(b1->len, 1) * LIMB_BITS);
-    mpfr_init2(r, prec);
+    if (op == BF_OP_RINT) {
+        /* infinite precision for rint */
+        mpfr_init2(r, bf_max(a1->len, 1) * LIMB_BITS);
+    } else {
+        mpfr_init2(r, prec);
+    }
 
     bf_to_mpfr(a, a1);
     bf_to_mpfr(b, b1);
@@ -386,9 +541,6 @@ int mpfr_exec_op(MPFTestOPEnum op, bf_t *r1, bf_t *a1, bf_t *b1,
     case BF_OP_CMP_LE:
         ret = mpfr_lessequal_p(a, b);
         break;
-    case BF_OP_RECIP:
-        mpfr_ui_div(r, 1, a, rnd_mode);
-        break;
     case BF_OP_DIV:
         mpfr_ret = mpfr_div(r, a, b, rnd_mode);
         break;
@@ -397,9 +549,6 @@ int mpfr_exec_op(MPFTestOPEnum op, bf_t *r1, bf_t *a1, bf_t *b1,
         break;
     case BF_OP_REM:
         mpfr_ret = mpfr_remainder(r, a, b, rnd_mode);
-        break;
-    case BF_OP_RSQRT:
-        mpfr_rec_sqrt(r, a, rnd_mode);
         break;
     case BF_OP_SQRT:
         mpfr_ret = mpfr_sqrt(r, a, rnd_mode);
@@ -583,8 +732,6 @@ int softfp_exec_op(MPFTestOPEnum op, bf_t *r1, bf_t *a1, bf_t *b1,
         ret = softfp_set_status(fflags);
         break;
         //    case BF_OP_RINT:
-        //    case BF_OP_RECIP:
-        //    case BF_OP_RSQRT:
         //    case BF_OP_OR:
         //    case BF_OP_XOR:
         //    case BF_OP_AND:
@@ -598,6 +745,116 @@ int softfp_exec_op(MPFTestOPEnum op, bf_t *r1, bf_t *a1, bf_t *b1,
     *pcycles += get_cycles();
     return ret;
 }
+
+mpd_context_t mpd_ctx;
+
+static void bfdec_to_mpd(mpd_t *a1, const bfdec_t *a)
+{
+    char *a_str;
+    a_str = bfdec_ftoa(NULL, a, BF_PREC_INF, BF_RNDZ | BF_FTOA_FORMAT_FREE);
+    //    printf("a_str=%s\n", a_str);
+    mpd_qsetprec(&mpd_ctx, a->len * LIMB_DIGITS);
+    mpd_set_string(a1, a_str, &mpd_ctx);
+    free(a_str);
+}
+
+static void mpd_to_bfdec(bfdec_t *r, const mpd_t *r1)
+{
+    char *r1_str;
+    r1_str = mpd_to_sci(r1, 0);
+    //    printf("r1_str=%s\n", r1_str);
+    bfdec_atof(r, r1_str, NULL, BF_PREC_INF, BF_RNDZ);
+    //    bfdec_print_str("ref", r);
+    free(r1_str);
+}
+
+int mpdecimal_exec_op(MPFTestOPEnum op, bfdec_t *r, bfdec_t *a, bfdec_t *b,
+                      limb_t prec, bf_rnd_t rnd_mode, int64_t *pcycles)
+{
+    mpd_t *a1, *b1, *r1;
+    uint32_t status;
+    int ret;
+    
+    a1 = mpd_new(&mpd_ctx);
+    b1 = mpd_new(&mpd_ctx);
+    r1 = mpd_new(&mpd_ctx);
+    
+    bfdec_to_mpd(a1, a);
+    bfdec_to_mpd(b1, b);
+    
+    mpd_qsetprec(&mpd_ctx, prec);
+    
+    //    printf("rnd_mode1=%d\n", rnd_mode);
+    switch(rnd_mode) {
+    case BF_RNDN:
+        mpd_qsetround(&mpd_ctx, MPD_ROUND_HALF_EVEN);
+        break;
+    case BF_RNDZ:
+        mpd_qsetround(&mpd_ctx, MPD_ROUND_DOWN);
+        break;
+    case BF_RNDU:
+        mpd_qsetround(&mpd_ctx, MPD_ROUND_CEILING);
+        break;
+    case BF_RNDD:
+        mpd_qsetround(&mpd_ctx, MPD_ROUND_FLOOR);
+        break;
+    case BF_RNDNA:
+        mpd_qsetround(&mpd_ctx, MPD_ROUND_HALF_UP);
+        break;
+    case BF_RNDA:
+        mpd_qsetround(&mpd_ctx, MPD_ROUND_UP);
+        break;
+    default:
+        abort();
+    }
+
+    *pcycles -= get_cycles();
+
+    status = 0;
+    switch(op) {
+    case BF_OP_ADD_DEC:
+        mpd_qadd(r1, a1, b1, &mpd_ctx, &status);
+        break;
+    case BF_OP_MUL_DEC:
+        mpd_qmul(r1, a1, b1, &mpd_ctx, &status);
+        break;
+    case BF_OP_DIV_DEC:
+        mpd_qdiv(r1, a1, b1, &mpd_ctx, &status);
+        break;
+    case BF_OP_SQRT_DEC:
+        mpd_qsqrt(r1, a1, &mpd_ctx, &status);
+        break;
+    case BF_OP_FMOD_DEC:
+        mpd_qrem(r1, a1, b1, &mpd_ctx, &status);
+        break;
+    case BF_OP_RINT_DEC:
+        mpd_qround_to_intx(r1, a1, &mpd_ctx, &status);
+        break;
+    default:
+        abort();
+    }
+
+    *pcycles += get_cycles();
+
+    ret = 0;
+    if (status & MPD_Inexact)
+        ret |= BF_ST_INEXACT;
+    if (status & MPD_Overflow)
+        ret |= BF_ST_OVERFLOW;
+    if (status & MPD_Underflow)
+        ret |= BF_ST_UNDERFLOW;
+    if (status & MPD_Invalid_operation)
+        ret |= BF_ST_INVALID_OP;
+
+    mpd_to_bfdec(r, r1);
+
+    mpd_del(a1);
+    mpd_del(b1);
+    mpd_del(r1);
+    
+    return ret;
+}
+
 
 int bf_exec_op(MPFTestOPEnum op, bf_t *r, bf_t *a, bf_t *b,
                limb_t prec, bf_flags_t flags, int64_t *pcycles)
@@ -617,7 +874,7 @@ int bf_exec_op(MPFTestOPEnum op, bf_t *r, bf_t *a, bf_t *b,
         break;
     case BF_OP_RINT:
         bf_set(r, a);
-        ret = bf_rint(r, prec, flags);
+        ret = bf_rint(r, flags);
         break;
     case BF_OP_ROUND:
         bf_set(r, a);
@@ -632,20 +889,14 @@ int bf_exec_op(MPFTestOPEnum op, bf_t *r, bf_t *a, bf_t *b,
     case BF_OP_CMP_LE:
         ret = bf_cmp_le(a, b);
         break;
-    case BF_OP_RECIP:
-        bf_recip(r, a, prec);
-        break;
     case BF_OP_DIV:
         ret = bf_div(r, a, b, prec, flags);
         break;
     case BF_OP_FMOD:
-        ret = bf_fmod(r, a, b, prec, flags);
+        ret = bf_rem(r, a, b, prec, flags, BF_RNDZ);
         break;
     case BF_OP_REM:
-        ret = bf_remainder(r, a, b, prec, flags);
-        break;
-    case BF_OP_RSQRT:
-        bf_rsqrt(r, a, prec);
+        ret = bf_rem(r, a, b, prec, flags, BF_RNDN);
         break;
     case BF_OP_SQRT:
         ret = bf_sqrt(r, a, prec, flags);
@@ -696,6 +947,40 @@ int bf_exec_op(MPFTestOPEnum op, bf_t *r, bf_t *a, bf_t *b,
     return ret;
 }
 
+int bfdec_exec_op(MPFTestOPEnum op, bfdec_t *r,
+                  const bfdec_t *a, const bfdec_t *b,
+                  limb_t prec, bf_flags_t flags, int64_t *pcycles)
+{
+    int ret;
+    
+    *pcycles -= get_cycles();
+    switch(op) {
+    case BF_OP_ADD_DEC:
+        ret = bfdec_add(r, a, b, prec, flags);
+        break;
+    case BF_OP_MUL_DEC:
+        ret = bfdec_mul(r, a, b, prec, flags);
+        break;
+    case BF_OP_DIV_DEC:
+        ret = bfdec_div(r, a, b, prec, flags);
+        break;
+    case BF_OP_SQRT_DEC:
+        ret = bfdec_sqrt(r, a, prec, flags);
+        break;
+    case BF_OP_FMOD_DEC:
+        ret = bfdec_rem(r, a, b, prec, flags, BF_RNDZ);
+        break;
+    case BF_OP_RINT_DEC:
+        bfdec_set(r, a);
+        ret = bfdec_rint(r, flags);
+        break;
+    default:
+        abort();
+    }
+    *pcycles += get_cycles();
+    return ret;
+}
+
 void print_status(int status)
 {
     printf("%c%c%c%c%c",
@@ -724,8 +1009,8 @@ void test_atof(limb_t prec, int duration_ms,
     
     mp_randinit(&rnd_state, seed);
 
-    bf_init(&r);
-    bf_init(&r_ref);
+    bf_init(&bf_ctx, &r);
+    bf_init(&bf_ctx, &r_ref);
     ti = 0;
     ti_ref = 0;
     start_time = get_clock_msec();
@@ -822,7 +1107,7 @@ void test_ftoa(limb_t prec, int duration_ms,
     int64_t ti, ti_ref, start_time;
     
     mp_randinit(&rnd_state, seed);
-    bf_init(&a);
+    bf_init(&bf_ctx, &a);
     ti_ref = 0;
     ti = 0;
     start_time = get_clock_msec();
@@ -841,8 +1126,8 @@ void test_ftoa(limb_t prec, int duration_ms,
         if (a.expn != BF_EXP_ZERO)
             a.expn += (mp_random64(&rnd_state) % (2 * e + 1)) - e;
         ti -= get_cycles();
-        bf_ftoa(&r_str, &a, radix, n_digits, rnd_mode |
-                BF_FTOA_FORMAT_FIXED | BF_FTOA_FORCE_EXP);
+        r_str = bf_ftoa(NULL, &a, radix, n_digits, rnd_mode |
+                        BF_FTOA_FORMAT_FIXED | BF_FTOA_FORCE_EXP);
         ti += get_cycles();
         {
             mpfr_t a1;
@@ -850,6 +1135,7 @@ void test_ftoa(limb_t prec, int duration_ms,
             DynBuf s_s, *s = &s_s;
             char *str, *p;
             slimb_t i;
+            BOOL is_zero;
             
             mpfr_init2(a1, bf_max(a.len, 1) * LIMB_BITS);
             bf_to_mpfr(a1, &a);
@@ -858,6 +1144,13 @@ void test_ftoa(limb_t prec, int duration_ms,
                                mpfr_get_rnd_mode(rnd_mode));
             ti_ref += get_cycles();
             /* add the decimal point and exponent */
+            is_zero = TRUE;
+            for(i = 0; i < n_digits; i++) {
+                if (str[i] != '0') {
+                    is_zero = FALSE;
+                    break;
+                }
+            }
             dbuf_init(s);
             p = str;
             if (*p == '-')
@@ -869,7 +1162,8 @@ void test_ftoa(limb_t prec, int duration_ms,
                     dbuf_putc(s, *p++);
                 }
             }
-            expn--;
+            if (!is_zero)
+                expn--;
             if ((radix & (radix - 1)) == 0 && radix <= 16) {
                 int radix_bits = 1;
                 while ((1 << radix_bits) != radix)
@@ -920,10 +1214,10 @@ void test_can_round(limb_t prec, int duration_ms, bf_rnd_t rnd_mode, int seed)
     int64_t start_time;
     
     mp_randinit(&rnd_state, seed);
-    bf_init(&a);
-    bf_init(&a_rounded);
-    bf_init(&b);
-    bf_init(&c);
+    bf_init(&bf_ctx, &a);
+    bf_init(&bf_ctx, &a_rounded);
+    bf_init(&bf_ctx, &b);
+    bf_init(&bf_ctx, &c);
     start_time = get_clock_msec();
     test_loop = 1;
     it = 0;
@@ -1039,11 +1333,294 @@ void test_mul_log2(int duration_ms, BOOL is_inv, BOOL is_ceil, int seed)
     printf(" %8u\n", it);
 }
 
+void test_op_rm_dec(MPFTestOPEnum op, limb_t rprec, int duration_ms,
+                    int exp_bits, bf_rnd_t rnd_mode, int seed)
+{
+    bfdec_t a, b, r, r_ref;
+    uint32_t status, ref_status;
+    int op_count, test_loop, it;
+    int  nb_limbs;
+    int64_t ti, ti_ref;
+    mp_randstate_t rnd_state;
+    BOOL res;
+    bf_rnd_t rnd_mode1;
+    bf_flags_t bf_flags;
+    int64_t start_time;
+    limb_t prec;
+    
+    bf_flags = rnd_mode | bf_set_exp_bits(exp_bits);
+    
+    mp_randinit(&rnd_state, seed);
+    bfdec_init(&bf_ctx, &a);
+    bfdec_init(&bf_ctx, &b);
+    bfdec_init(&bf_ctx, &r);
+    bfdec_init(&bf_ctx, &r_ref);
+    bfdec_set_ui(&b, 0);
+    bfdec_set_ui(&r, 0);
+    bfdec_set_ui(&r_ref, 0);
+
+    ti = 0;
+    ti_ref = 0;
+    start_time = get_clock_msec();
+    test_loop = 1;
+    it = 0;
+    for(;;) {
+        if (rprec == 0) {
+            prec = (mp_random64(&rnd_state) % 1000) + 24;
+        } else {
+            prec = rprec;
+        }
+        switch(op) {
+        case BF_OP_RINT_DEC:
+        case BF_OP_SQRT_DEC:
+            op_count = 1;
+            break;
+        default:
+            op_count = 2;
+            break;
+        }
+        if (op_count == 1) {
+            if (it < SPECIAL_COUNT) {
+                set_special_dec(&a, it);
+            } else {
+                limb_t prec1;
+                
+                prec1 = mp_random64(&rnd_state) % (3 * prec) + 1;
+                bfdec_rrandom(&a, prec1, &rnd_state);
+                if (a.expn != BF_EXP_ZERO)
+                    a.expn += prec1 / 2;
+                if (op == BF_OP_SQRT_DEC) {
+                    a.sign = 0;
+                } else {
+                    a.sign = mp_random64(&rnd_state) & 1;
+                }
+            }
+        } else {
+            if (it < SPECIAL_COUNT * SPECIAL_COUNT) {
+                set_special_dec(&a, it % SPECIAL_COUNT);
+                set_special_dec(&b, it / SPECIAL_COUNT);
+            } else {
+                bfdec_rrandom_large(&a, prec, &rnd_state);
+                bfdec_rrandom_large(&b, prec, &rnd_state);
+            }
+        }
+
+        if (op == BF_OP_DIVREM_DEC) {
+            bfdec_t q, a_ref;
+            bfdec_init(&bf_ctx, &q);
+            bfdec_init(&bf_ctx, &a_ref);
+            bfdec_divrem(&q, &r, &a, &b, BF_PREC_INF, BF_RNDZ, rnd_mode);
+            if (bf_is_finite((bf_t *)&r) &&
+                bf_is_finite((bf_t *)&a) &&
+                bf_is_finite((bf_t *)&b)) {
+                bfdec_mul(&a_ref, &q, &b, BF_PREC_INF, BF_RNDZ);
+                bfdec_add(&a_ref, &a_ref, &r, BF_PREC_INF, BF_RNDZ);
+                res = !bfdec_cmp_eq(&a, &a_ref);
+                if (res) {
+                    printf("\nERROR (%d):\n", it);
+                    bfdec_print_str("a  ", &a);
+                    bfdec_print_str("b  ", &b);
+                    bfdec_print_str("q  ", &q);
+                    bfdec_print_str("r  ", &r);
+                    bfdec_print_str("a_ref", &a_ref);
+                    exit(1);
+                }
+            }
+            bfdec_delete(&q);
+            bfdec_delete(&a_ref);
+        } else {
+            //        bfdec_print_str("a", &a);
+            //        bfdec_print_str("b", &b);
+            status = bfdec_exec_op(op, &r, &a, &b, prec, bf_flags, &ti);
+            //        bfdec_print_str("r", &r);
+            
+            rnd_mode1 = rnd_mode;
+            ref_status = mpdecimal_exec_op(op, &r_ref, &a, &b, prec, rnd_mode1,
+                                           &ti_ref);
+            
+            if (op == BF_OP_CMP_EQ ||
+                op == BF_OP_CMP_LE ||
+                op == BF_OP_CMP_LT) {
+                res = (status != ref_status);
+            } else {
+                res = (bfdec_cmp_full(&r, &r_ref) != 0);
+                if ((status & BF_ST_INEXACT) !=
+                    (ref_status & BF_ST_INEXACT))
+                    res = 1;
+            }
+            
+            if (res) {
+                printf("\nERROR (%d):\n", it);
+                
+                bfdec_print_str("a  ", &a);
+                if (op_count > 1) {
+                    bfdec_print_str("b  ", &b);
+                }
+                bfdec_print_str("r  ", &r);
+                bfdec_print_str("ref", &r_ref);
+                printf("st    ="); print_status(status); printf("\n");
+                printf("ref_st="); print_status(ref_status); printf("\n");
+                exit(1);
+            }
+        }
+
+        it++;
+        if ((it & (test_loop - 1)) == 0) {
+            if ((get_clock_msec() - start_time) >= duration_ms)
+                break;
+            test_loop *= 2;
+        }
+    }
+
+    nb_limbs = (prec + 63) / 64;
+    printf(" %8u %8.1f %8.1f\n",
+           it,
+           (double)ti / it / nb_limbs,
+           (double)ti_ref / it / nb_limbs);
+
+    bfdec_delete(&a);
+    bfdec_delete(&b);
+    bfdec_delete(&r);
+    bfdec_delete(&r_ref);
+}
+
+static void test_mp_sqrtrem(limb_t rprec, int duration_ms, int seed)
+{
+    int it, test_loop;
+    int64_t start_time, ti;
+    limb_t *tabs, *tabr, *taba, *tabb, c;
+    slimb_t n, i, n_max;
+    mp_randstate_t rnd_state;
+
+    n_max = rprec;
+    
+    mp_randinit(&rnd_state, seed);
+    taba = malloc(2 * n_max * sizeof(limb_t));
+    tabb = malloc(2 * n_max * sizeof(limb_t));
+    tabs = malloc(n_max * sizeof(limb_t));
+    tabr = malloc(2 * n_max * sizeof(limb_t));
+
+    test_loop = 1;
+    it = 0;
+    start_time = get_clock_msec();
+    ti = 0;
+    for(;;) {
+        n = (mp_random64(&rnd_state) % n_max) + 1;
+
+        mp_rrandom(taba, 2 * n * LIMB_BITS, &rnd_state);
+        taba[2 * n - 1] |= (limb_t)1 << (LIMB_BITS - 2);
+        
+        for(i = 0; i < n * 2; i++)
+            tabr[i] = taba[i];
+        ti -= get_cycles();
+        mp_sqrtrem(&bf_ctx, tabs, tabr, n);
+        ti += get_cycles();
+
+        /* check the result */
+        mp_mul(&bf_ctx, tabb, tabs, n, tabs, n);
+        c = mp_add(tabb, tabb, tabr, n + 1, 0);
+        c = mp_add_ui(tabb + n + 1, c, n - 1);
+        if (mp_cmp(taba, n * 2, tabb, n * 2) != 0)
+            goto error;
+        tabb[n] = mp_add(tabb, tabs, tabs, n, 0);
+        if (mp_cmp(tabr, n + 1, tabb, n + 1) > 0) {
+        error:
+            printf("ERROR %d\n", it);
+            mp_print_str("a", taba, n * 2);
+            mp_print_str("s", tabs, n);
+            mp_print_str("r", tabr, n + 1);
+            exit(1);
+        }
+
+        it++;
+        if (it == test_loop) {
+            if ((get_clock_msec() - start_time) >= duration_ms)
+                break;
+            test_loop *= 2;
+        }
+    }
+    printf(" %8u %8.1f\n",
+           it,
+           (double)ti / it / n);
+    free(taba);
+    free(tabb);
+    free(tabr);
+    free(tabs);
+}
+
+static void test_mp_recip(limb_t rprec, int duration_ms, int seed)
+{
+    int it, test_loop, incr;
+    int64_t start_time, ti;
+    limb_t *tabr, *taba, *tabb, *tabc;
+    slimb_t n, n_max, i;
+    mp_randstate_t rnd_state;
+
+    n_max = rprec;
+    
+    mp_randinit(&rnd_state, seed);
+    taba = malloc(n_max * sizeof(limb_t));
+    tabb = malloc((2 * n_max + 1) * sizeof(limb_t));
+    tabc = malloc((n_max + 1) * sizeof(limb_t));
+    tabr = malloc((n_max + 1) * sizeof(limb_t));
+
+    test_loop = 1;
+    it = 0;
+    start_time = get_clock_msec();
+    ti = 0;
+    for(;;) {
+        n = (mp_random64(&rnd_state) % n_max) + 1;
+
+        mp_rrandom(taba, n * LIMB_BITS, &rnd_state);
+        taba[n - 1] |= (limb_t)1 << (LIMB_BITS - 1);
+        
+        ti -= get_cycles();
+        mp_recip(&bf_ctx, tabr, taba, n);
+        ti += get_cycles();
+
+        /* check the result */
+        mp_mul(&bf_ctx, tabb, tabr, n + 1, taba, n);
+        incr = 0;
+        if (tabb[2 * n] >= 1)
+            goto error;
+
+        for(i = 0; i < n + 1; i++)
+            tabc[i] = tabr[i];
+        mp_add_ui(tabc, 2, n + 1);
+        mp_mul(&bf_ctx, tabb, tabc, n + 1, taba, n);
+
+        incr = 2;
+        if (tabb[2 * n] < 1) {
+        error:
+            printf("ERROR %d\n", it);
+            printf("n=%d incr=%d\n", (int)n, incr);
+            mp_print_str("a", taba, n);
+            mp_print_str("r", tabr, n + 1);
+            mp_print_str("b", tabb, 2 * n + 1);
+            exit(1);
+        }
+
+        it++;
+        if (it == test_loop) {
+            if ((get_clock_msec() - start_time) >= duration_ms)
+                break;
+            test_loop *= 2;
+        }
+    }
+    printf(" %8u %8.1f\n",
+           it,
+           (double)ti / it / n);
+    free(taba);
+    free(tabb);
+    free(tabr);
+    free(tabc);
+}
+
 void test_op_rm(MPFTestOPEnum op, limb_t rprec, int duration_ms,
                 int exp_bits, bf_rnd_t rnd_mode, int seed)
 {
     bf_t a, b, r, r_ref;
-    int op_count, status, ref_status, test_loop, it;
+    int op_count, status, ref_status, test_loop, it, it_perf;
     int  nb_limbs;
     int64_t ti, ti_ref, ti_dummy;
     mp_randstate_t rnd_state;
@@ -1058,6 +1635,12 @@ void test_op_rm(MPFTestOPEnum op, limb_t rprec, int duration_ms,
     fflush(stdout);
     
     switch(op) {
+    case BF_OP_MP_SQRTREM:
+        test_mp_sqrtrem(rprec, duration_ms, seed);
+        return;
+    case BF_OP_MP_RECIP:
+        test_mp_recip(rprec, duration_ms, seed);
+        return;
     case BF_OP_ATOF:
         test_atof(rprec, duration_ms, exp_bits, rnd_mode, seed);
         return;
@@ -1071,6 +1654,15 @@ void test_op_rm(MPFTestOPEnum op, limb_t rprec, int duration_ms,
     case BF_OP_DIV_L2RADIX:
         test_mul_log2(duration_ms, (op == BF_OP_DIV_L2RADIX), rnd_mode == BF_RNDU, seed);
         return;
+    case BF_OP_ADD_DEC:
+    case BF_OP_MUL_DEC:
+    case BF_OP_DIV_DEC:
+    case BF_OP_SQRT_DEC:
+    case BF_OP_FMOD_DEC:
+    case BF_OP_DIVREM_DEC:
+    case BF_OP_RINT_DEC:
+        test_op_rm_dec(op, rprec, duration_ms, exp_bits, rnd_mode, seed);
+        return;
     default:
         break;
     }
@@ -1081,10 +1673,10 @@ void test_op_rm(MPFTestOPEnum op, limb_t rprec, int duration_ms,
         bf_flags |= BF_FLAG_SUBNORMAL;
     
     mp_randinit(&rnd_state, seed);
-    bf_init(&a);
-    bf_init(&b);
-    bf_init(&r);
-    bf_init(&r_ref);
+    bf_init(&bf_ctx, &a);
+    bf_init(&bf_ctx, &b);
+    bf_init(&bf_ctx, &r);
+    bf_init(&bf_ctx, &r_ref);
     bf_set_ui(&b, 0);
     bf_set_ui(&r, 0);
     bf_set_ui(&r_ref, 0);
@@ -1094,6 +1686,7 @@ void test_op_rm(MPFTestOPEnum op, limb_t rprec, int duration_ms,
     start_time = get_clock_msec();
     test_loop = 1;
     it = 0;
+    it_perf = 0;
     for(;;) {
         if (rprec == 0) {
             prec = (mp_random64(&rnd_state) % 1000) + 24;
@@ -1102,8 +1695,6 @@ void test_op_rm(MPFTestOPEnum op, limb_t rprec, int duration_ms,
         }
         switch(op) {
         case BF_OP_RINT:
-        case BF_OP_RECIP:
-        case BF_OP_RSQRT:
         case BF_OP_SQRT:
         case BF_OP_EXP:
         case BF_OP_LOG:
@@ -1139,7 +1730,7 @@ void test_op_rm(MPFTestOPEnum op, limb_t rprec, int duration_ms,
                         if (a.expn != BF_EXP_ZERO)
                             a.expn++;
                         k = (mp_random64(&rnd_state) % 2000) - 1000;
-                        bf_init(c);
+                        bf_init(&bf_ctx, c);
                         bf_const_pi(c, prec1 + 1, BF_RNDN);
                         c->expn--; /* pi/2 */
                         bf_mul_si(c, c, k, prec1 + 1, BF_RNDN);
@@ -1151,7 +1742,7 @@ void test_op_rm(MPFTestOPEnum op, limb_t rprec, int duration_ms,
                             a.expn += prec1 / 2;
                     }
                 }
-                if (op == BF_OP_RSQRT || op == BF_OP_SQRT || op == BF_OP_LOG) {
+                if (op == BF_OP_SQRT || op == BF_OP_LOG) {
                     a.sign = 0;
                 } else {
                     a.sign = mp_random64(&rnd_state) & 1;
@@ -1235,6 +1826,15 @@ void test_op_rm(MPFTestOPEnum op, limb_t rprec, int duration_ms,
             printf("ref_st="); print_status(ref_status); printf("\n");
             exit(1);
         }
+        /* excluding special value from CPU time */
+        if ((op_count == 1 && it < SPECIAL_COUNT) ||
+            (op_count == 2 && it < SPECIAL_COUNT * SPECIAL_COUNT)) {
+            ti = 0;
+            ti_ref = 0;
+        } else {
+            it_perf++;
+        }
+
         it++;
         if ((it & (test_loop - 1)) == 0) {
             if ((get_clock_msec() - start_time) >= duration_ms)
@@ -1246,8 +1846,8 @@ void test_op_rm(MPFTestOPEnum op, limb_t rprec, int duration_ms,
     nb_limbs = (prec + 63) / 64;
     printf(" %8u %8.1f %8.1f\n",
            it,
-           (double)ti / it / nb_limbs,
-           (double)ti_ref / it / nb_limbs);
+           (double)ti / it_perf / nb_limbs,
+           (double)ti_ref / it_perf / nb_limbs);
 
     bf_delete(&a);
     bf_delete(&b);
@@ -1302,6 +1902,7 @@ void test_op(MPFTestOPEnum op, limb_t prec, int duration_ms, int exp_bits,
             rm_allowed[BF_RNDZ] = 1;
             rm_allowed[BF_RNDU] = 1;
             rm_allowed[BF_RNDD] = 1;
+            rm_allowed[BF_RNDA] = 1;
             rm_allowed[BF_RNDNA] = 1;
             break;
         case BF_OP_FTOA:
@@ -1309,19 +1910,40 @@ void test_op(MPFTestOPEnum op, limb_t prec, int duration_ms, int exp_bits,
             rm_allowed[BF_RNDZ] = 1;
             rm_allowed[BF_RNDU] = 1;
             rm_allowed[BF_RNDD] = 1;
+            rm_allowed[BF_RNDA] = 1;
             break;
         case BF_OP_SUB:
             /* minimal test for SUB which is like ADD */
             rm_allowed[BF_RNDN] = 1;
             break;
-        case BF_OP_RECIP:
-        case BF_OP_RSQRT:
-            rm_allowed[BF_RNDF] = 1;
-            break;
         case BF_OP_MUL_L2RADIX:
         case BF_OP_DIV_L2RADIX:
             rm_allowed[BF_RNDU] = 1;
             rm_allowed[BF_RNDD] = 1;
+            break;
+        case BF_OP_ADD_DEC:
+        case BF_OP_MUL_DEC:
+        case BF_OP_DIV_DEC:
+        case BF_OP_RINT_DEC:
+            rm_allowed[BF_RNDN] = 1;
+            rm_allowed[BF_RNDZ] = 1;
+            rm_allowed[BF_RNDU] = 1;
+            rm_allowed[BF_RNDD] = 1;
+            rm_allowed[BF_RNDA] = 1;
+            rm_allowed[BF_RNDNA] = 1;
+            break;
+        case BF_OP_SQRT_DEC:
+            rm_allowed[BF_RNDN] = 1;
+            //* bug in mpd_qsqrt() */
+            //            rm_allowed[BF_RNDZ] = 1;
+            //            rm_allowed[BF_RNDU] = 1;
+            //            rm_allowed[BF_RNDD] = 1;
+            break;
+        case BF_OP_FMOD_DEC:
+            break; /* bug in mpd_qrem() */
+        case BF_OP_DIVREM_DEC:
+            rm_allowed[BF_RNDZ] = 1;
+            rm_allowed[BF_RNDN] = 1;
             break;
         default:
             rm_allowed[BF_RNDZ] = 1;
@@ -1355,19 +1977,25 @@ void help(void)
            "\n"
            "Options:\n"
            "-h         this help\n"
-           "-s seed    set the initial seed\n");
+           "-s seed    set the initial seed\n"
+           "-S         single iteration of tests\n"
+           "-p prec    force precision\n"
+           );
     exit(1);
 }
 
 int main(int argc, char **argv)
 {
     int seed, duration_ms, c;
+    limb_t prec;
     MPFTestOPEnum op, op_start, op_last;
-                        
+    BOOL short_test = FALSE;
+    
     seed = 1234;
     duration_ms = 100;
+    prec = 0;
     for(;;) {
-        c = getopt(argc, argv, "hs:");
+        c = getopt(argc, argv, "hs:Sp:");
         if (c == -1)
             break;
         switch(c) {
@@ -1376,6 +2004,12 @@ int main(int argc, char **argv)
         case 's':
             seed = strtoul(optarg, NULL, 0);
             duration_ms = 1000;
+            break;
+        case 'S':
+            short_test = TRUE;
+            break;
+        case 'p':
+            prec = (limb_t)strtod(optarg, NULL);
             break;
         default:
             exit(1);
@@ -1390,39 +2024,51 @@ int main(int argc, char **argv)
         op_last = get_op_from_str(argv[optind++]);
 
     mpfr_exec_init();
+    bf_context_init(&bf_ctx, my_bf_realloc, NULL);
+    mpd_init(&mpd_ctx, 16);
     
     printf("%-20s %5s %3s %3s %5s %8s %8s %8s\n", "OP", "PREC", "EXP", "RND", "SEED", "CNT", "c/64bit", "ref");
+
     for(;;) {
         for(op = op_start; op <= op_last; op++) {
-            if (op == BF_OP_MUL_L2RADIX || op == BF_OP_DIV_L2RADIX) {
-                test_op(op, LIMB_BITS, duration_ms, 0, seed);
-            } else if (op == BF_OP_CAN_ROUND) {
-                test_op(op, 8, duration_ms, BF_EXP_BITS_MAX, seed);
-                test_op(op, 53, duration_ms, BF_EXP_BITS_MAX, seed);
-                test_op(op, 256, duration_ms, BF_EXP_BITS_MAX, seed);
+            if (prec != 0) {
+                test_op(op, prec, duration_ms, BF_EXP_BITS_MAX, seed);
             } else {
-                if (op == BF_OP_MUL ||
-                    op == BF_OP_ADD ||
-                    op == BF_OP_DIV ||
-                    op == BF_OP_SQRT ||
-                    op == BF_OP_CMP_EQ ||
-                    op == BF_OP_CMP_LT ||
-                    op == BF_OP_CMP_LE) {
-                    test_op(op, 53, duration_ms, 11, seed);
-                }
-                test_op(op, 53, duration_ms, BF_EXP_BITS_MAX, seed);
-                test_op(op, 112, duration_ms, BF_EXP_BITS_MAX, seed);
-                /* mpfr bug ? */
-                if (op !=  BF_OP_SQRT)
+                if (op == BF_OP_MUL_L2RADIX || op == BF_OP_DIV_L2RADIX) {
+                    test_op(op, LIMB_BITS, duration_ms, 0, seed);
+                } else if (op == BF_OP_CAN_ROUND) {
+                    test_op(op, 8, duration_ms, BF_EXP_BITS_MAX, seed);
+                    test_op(op, 53, duration_ms, BF_EXP_BITS_MAX, seed);
                     test_op(op, 256, duration_ms, BF_EXP_BITS_MAX, seed);
-                test_op(op, 3000, duration_ms, BF_EXP_BITS_MAX, seed);
-                if (op == BF_OP_RECIP) {
-                    test_op(op, 0, duration_ms, BF_EXP_BITS_MAX, seed);
+                } else if (op >= BF_OP_ADD_DEC && op <= BF_OP_RINT_DEC) {
+                    test_op(op, 16, duration_ms, BF_EXP_BITS_MAX, seed);
+                    test_op(op, 100, duration_ms, BF_EXP_BITS_MAX, seed);
+                } else if (op == BF_OP_MP_SQRTREM ||
+                           op == BF_OP_MP_RECIP) {
+                    test_op(op, 100, duration_ms, BF_EXP_BITS_MAX, seed);
+                } else {
+                    if (op == BF_OP_MUL ||
+                        op == BF_OP_ADD ||
+                        op == BF_OP_DIV ||
+                        op == BF_OP_SQRT ||
+                        op == BF_OP_CMP_EQ ||
+                        op == BF_OP_CMP_LT ||
+                        op == BF_OP_CMP_LE) {
+                        test_op(op, 53, duration_ms, 11, seed);
+                    }
+                    test_op(op, 53, duration_ms, BF_EXP_BITS_MAX, seed);
+                    test_op(op, 112, duration_ms, BF_EXP_BITS_MAX, seed);
+                    /* mpfr bug ? */
+                    if (op !=  BF_OP_SQRT)
+                        test_op(op, 256, duration_ms, BF_EXP_BITS_MAX, seed);
+                    test_op(op, 3000, duration_ms, BF_EXP_BITS_MAX, seed);
                 }
             }
         }
         seed++;
         duration_ms = 1000;
+        if (short_test)
+            break;
     }
     return 0;
 }

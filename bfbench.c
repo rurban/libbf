@@ -37,7 +37,9 @@
 /* number of bits per base 10 digit */
 #define BITS_PER_DIGIT 3.32192809488736234786
 
-void *bf_realloc(void *ptr, size_t size)
+static bf_context_t bf_ctx;
+
+static void *my_bf_realloc(void *opaque, void *ptr, size_t size)
 {
     return realloc(ptr, size);
 }
@@ -161,9 +163,9 @@ static void bf_op_speed(double k_start1, double k_end1,
                    nb_mods);
         }
         fflush(stdout);
-        bf_init(&A);
-        bf_init(&B);
-        bf_init(&C);
+        bf_init(&bf_ctx, &A);
+        bf_init(&bf_ctx, &B);
+        bf_init(&bf_ctx, &C);
         bf_resize(&A, n);
         bf_resize(&B, n);
         A.expn = n * LIMB_BITS;
@@ -172,6 +174,10 @@ static void bf_op_speed(double k_start1, double k_end1,
             A.tab[i] = mp_random64(&seed);
             B.tab[i] = mp_random64(&seed);
         }
+        /* normalize */
+        A.tab[n - 1] |= (limb_t)1 << (LIMB_BITS - 1);
+        B.tab[n - 1] |= (limb_t)1 << (LIMB_BITS - 1);
+
         /* one multiplication to initialize the constants */
         if (fft_len_log2 <= 20) {
             bf_mul(&C, &A, &B, n, BF_RNDN);
@@ -236,7 +242,7 @@ static void mpfr_mul_speed(double k_start1, double k_end1,
 
     gmp_randinit_mt(rnd_state);
     f = fopen(filename, "wb");
-    printf("%5s %5s %5s %10s %10s\n", "K", "SIZE", "DIGIT",
+    printf("%5s %5s %5s %10s %10s\n", "K", "BITS", "DIGIT",
            "ms", "ns/limb");
     k_start = lrint(k_start1 * K_STEPS);
     k_end = lrint(k_end1 * K_STEPS);
@@ -246,7 +252,7 @@ static void mpfr_mul_speed(double k_start1, double k_end1,
         n = (limb_t)ceil(n_digits * BITS_PER_DIGIT / LIMB_BITS);
         printf("%5.1f %5s %5s",
                K,
-               get_si_prefix(buf1, sizeof(buf1), n * (LIMB_BITS / 8)),
+               get_si_prefix(buf1, sizeof(buf1), n * LIMB_BITS),
                get_si_prefix(buf2, sizeof(buf2),
                              (int64_t)ceil(n * LIMB_BITS / BITS_PER_DIGIT)));
         fflush(stdout);
@@ -333,6 +339,7 @@ int main(int argc, char **argv)
                );
         exit(1);
     }
+    bf_context_init(&bf_ctx, my_bf_realloc, NULL);
     cmd = argv[1];
 #ifdef CONFIG_MPFR
     if (!strcmp(cmd, "mpfr_bench")) {
