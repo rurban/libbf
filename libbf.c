@@ -2622,14 +2622,17 @@ int bf_get_int64(int64_t *pres, const bf_t *a, int flags)
             v = INT64_MAX;
         }
     } else {
+        ret = BF_ST_OVERFLOW;
         slimb_t bit_pos = a->len * LIMB_BITS - a->expn;
         v = get_bits(a->tab, a->len, bit_pos);
 #if LIMB_BITS == 32
         v |= (uint64_t)get_bits(a->tab, a->len, bit_pos + 32) << 32;
 #endif
-        if (a->sign)
+        if (a->sign) {
+            if (a->expn == 64 && v == (uint64_t)INT64_MAX + 1)
+                ret = 0;
             v = -v;
-        ret = 0;
+        }
     }
     *pres = v;
     return ret;
