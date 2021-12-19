@@ -7513,13 +7513,13 @@ static inline NTTLimb int_to_ntt_limb2(limb_t a, limb_t m)
 /* return r + m if r < 0 otherwise r. */
 static inline __m256d ntt_mod1(__m256d r, __m256d m)
 {
-    return _mm256_blendv_pd(r, r + m, r);
+    return _mm256_blendv_pd(r, _mm256_add_pd(r, m), r);
 }
 
 /* input: abs(r) < 2 * m. Output: abs(r) < m */
 static inline __m256d ntt_mod(__m256d r, __m256d mf, __m256d m2f)
 {
-    return _mm256_blendv_pd(r, r + m2f, r) - mf;
+    return _mm256_sub_pd(_mm256_blendv_pd(r, _mm256_add_pd(r, m2f), r), mf);
 }
 
 /* input: abs(a*b) < 2 * m^2, output: abs(r) < m */
@@ -7527,12 +7527,12 @@ static inline __m256d ntt_mul_mod(__m256d a, __m256d b, __m256d mf,
                                   __m256d m_inv)
 {
     __m256d r, q, ab1, ab0, qm0, qm1;
-    ab1 = a * b;
-    q = _mm256_round_pd(ab1 * m_inv, 0); /* round to nearest */
-    qm1 = q * mf;
+    ab1 = _mm256_mul_pd(a, b);
+    q = _mm256_round_pd(_mm256_mul_pd(ab1, m_inv), 0); /* round to nearest */
+    qm1 = _mm256_mul_pd(q, mf);
     qm0 = _mm256_fmsub_pd(q, mf, qm1); /* low part */
     ab0 = _mm256_fmsub_pd(a, b, ab1); /* low part */
-    r = (ab1 - qm1) + (ab0 - qm0);
+    r = _mm256_add_pd(_mm256_sub_pd(ab1, qm1), _mm256_sub_pd(ab0, qm0));
     return r;
 }
 
@@ -7598,8 +7598,8 @@ static no_inline int ntt_fft(BFNTTState *s,
         a1 = _mm256_load_pd(&tab_in[k + stride_in]);
         c = _mm256_load_pd(trig);
         trig += 4;
-        b0 = ntt_mod(a0 + a1, mf, m2f);
-        b1 = ntt_mul_mod(a0 - a1, c, mf, m_inv);
+        b0 = ntt_mod(_mm256_add_pd(a0, a1), mf, m2f);
+        b1 = ntt_mul_mod(_mm256_sub_pd(a0, a1), c, mf, m_inv);
         a0 = _mm256_permute2f128_pd(b0, b1, 0x20);
         a1 = _mm256_permute2f128_pd(b0, b1, 0x31);
         a0 = _mm256_permute4x64_pd(a0, 0xd8);
@@ -7621,8 +7621,8 @@ static no_inline int ntt_fft(BFNTTState *s,
         a1 = _mm256_load_pd(&tab_in[k + stride_in]);
         c = _mm256_setr_pd(trig[0], trig[0], trig[1], trig[1]);
         trig += 2;
-        b0 = ntt_mod(a0 + a1, mf, m2f);
-        b1 = ntt_mul_mod(a0 - a1, c, mf, m_inv);
+        b0 = ntt_mod(_mm256_add_pd(a0, a1), mf, m2f);
+        b1 = ntt_mul_mod(_mm256_sub_pd(a0, a1), c, mf, m_inv);
         a0 = _mm256_permute2f128_pd(b0, b1, 0x20);
         a1 = _mm256_permute2f128_pd(b0, b1, 0x31);
         _mm256_store_pd(&tab_out[p], a0);
@@ -7650,8 +7650,8 @@ static no_inline int ntt_fft(BFNTTState *s,
             for(j = 0; j < fft_per_block; j += 4) {
                 a0 = _mm256_load_pd(&tab_in[k + j]);
                 a1 = _mm256_load_pd(&tab_in[k + j + stride_in]);
-                b0 = ntt_mod(a0 + a1, mf, m2f);
-                b1 = ntt_mul_mod(a0 - a1, c, mf, m_inv);
+                b0 = ntt_mod(_mm256_add_pd(a0, a1), mf, m2f);
+                b1 = ntt_mul_mod(_mm256_sub_pd(a0, a1), c, mf, m_inv);
                 _mm256_store_pd(&tab_out[p + j], b0);
                 _mm256_store_pd(&tab_out[p + j + fft_per_block], b1);
             }
@@ -7669,8 +7669,8 @@ static no_inline int ntt_fft(BFNTTState *s,
     for(k = 0; k < stride_in; k += 4) {
         a0 = _mm256_load_pd(&tab_in[k]);
         a1 = _mm256_load_pd(&tab_in[k + stride_in]);
-        b0 = ntt_mod(a0 + a1, mf, m2f);
-        b1 = ntt_mod(a0 - a1, mf, m2f);
+        b0 = ntt_mod(_mm256_add_pd(a0, a1), mf, m2f);
+        b1 = ntt_mod(_mm256_sub_pd(a0, a1), mf, m2f);
         _mm256_store_pd(&tab_out[k], b0);
         _mm256_store_pd(&tab_out[k + stride_in], b1);
     }
@@ -8109,7 +8109,7 @@ static no_inline void ntt_to_limb(BFNTTState *s, limb_t *tabr, limb_t r_len,
         for(j = 0; j < nb_mods - 1; j++) {
             y[j].v = ntt_mod1(y[j].v, mf[j]);
             for(k = j + 1; k < nb_mods; k++) {
-                y[k].v = ntt_mul_mod(y[k].v - y[j].v,
+                y[k].v = ntt_mul_mod(_mm256_sub_pd(y[k].v, y[j].v),
                                      mods_cr_vec[l], mf[k], m_inv[k]);
                 l++;
             }
