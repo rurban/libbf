@@ -7291,9 +7291,20 @@ static inline void put_bits(limb_t *tab, limb_t len, slimb_t pos, limb_t val)
 
 typedef double NTTLimb;
 
+#if LIMB_BITS == 64
+
 /* we must have: modulo >= 1 << NTT_MOD_LOG2_MIN */
 #define NTT_MOD_LOG2_MIN 50
 #define NTT_MOD_LOG2_MAX 51
+
+#else
+
+/* we must have: modulo >= 1 << NTT_MOD_LOG2_MIN */
+#define NTT_MOD_LOG2_MIN 29
+#define NTT_MOD_LOG2_MAX 30
+
+#endif
+
 #define NB_MODS 5
 #define NTT_PROOT_2EXP 39
 static const int ntt_int_bits[NB_MODS] = { 254, 203, 152, 101, 50, };
