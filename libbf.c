@@ -22,12 +22,21 @@
  * THE SOFTWARE.
  */
 
+#ifdef HAVE_QUICKJS_CONFIG_H
+#include "quickjs-config.h"
+#else
+#include "config.h"
+#endif
+
 #include <stdlib.h>
 #include <stdio.h>
 #include <inttypes.h>
 #include <math.h>
 #include <string.h>
-#include <assert.h>
+
+#include "quickjs.h"
+
+#ifdef CONFIG_BIGNUM
 
 #ifdef __AVX2__
 #include <immintrin.h>
@@ -238,6 +247,9 @@ int bf_set_ui(bf_t *r, uint64_t a)
         shift = clz(a1);
         r->tab[0] = a0 << shift;
         r->tab[1] = (a1 << shift) | (a0 >> (LIMB_BITS - shift));
+		// ^^^^^^^^^^^^^ or is this wrong and should it remain:
+		// r->tab[1] = a >> (LIMB_BITS - shift);
+
         r->expn = 2 * LIMB_BITS - shift;
     }
 #endif
@@ -2529,19 +2541,18 @@ fail:
     return BF_ST_MEM_ERROR;
 }
 
-/* The rounding mode is always BF_RNDZ. Return BF_ST_OVERFLOW if there
+/* The rounding mode is always BF_RNDZ. Return BF_ST_INVALID_OP if there
    is an overflow and 0 otherwise. */
 int bf_get_int32(int *pres, const bf_t *a, int flags)
 {
     uint32_t v;
     int ret;
     if (a->expn >= BF_EXP_INF) {
-        ret = 0;
+        ret = BF_ST_INVALID_OP;
         if (flags & BF_GET_INT_MOD) {
             v = 0;
         } else if (a->expn == BF_EXP_INF) {
             v = (uint32_t)INT32_MAX + a->sign;
-            /* XXX: return overflow ? */
         } else {
             v = INT32_MAX;
         }
@@ -2554,7 +2565,7 @@ int bf_get_int32(int *pres, const bf_t *a, int flags)
             v = -v;
         ret = 0;
     } else if (!(flags & BF_GET_INT_MOD)) {
-        ret = BF_ST_OVERFLOW;
+        ret = BF_ST_INVALID_OP;
         if (a->sign) {
             v = (uint32_t)INT32_MAX + 1;
             if (a->expn == 32 &&
@@ -2574,14 +2585,14 @@ int bf_get_int32(int *pres, const bf_t *a, int flags)
     return ret;
 }
 
-/* The rounding mode is always BF_RNDZ. Return BF_ST_OVERFLOW if there
+/* The rounding mode is always BF_RNDZ. Return BF_ST_INVALID_OP if there
    is an overflow and 0 otherwise. */
 int bf_get_int64(int64_t *pres, const bf_t *a, int flags)
 {
     uint64_t v;
     int ret;
     if (a->expn >= BF_EXP_INF) {
-        ret = 0;
+        ret = BF_ST_INVALID_OP;
         if (flags & BF_GET_INT_MOD) {
             v = 0;
         } else if (a->expn == BF_EXP_INF) {
@@ -2606,7 +2617,7 @@ int bf_get_int64(int64_t *pres, const bf_t *a, int flags)
             v = -v;
         ret = 0;
     } else if (!(flags & BF_GET_INT_MOD)) {
-        ret = BF_ST_OVERFLOW;
+        ret = BF_ST_INVALID_OP;
         if (a->sign) {
             uint64_t v1;
             v = (uint64_t)INT64_MAX + 1;
@@ -2638,25 +2649,21 @@ int bf_get_int64(int64_t *pres, const bf_t *a, int flags)
     return ret;
 }
 
-/* The rounding mode is always BF_RNDZ. Return BF_ST_OVERFLOW if there
+/* The rounding mode is always BF_RNDZ. Return BF_ST_INVALID_OP if there
    is an overflow and 0 otherwise. */
-int bf_get_uint64(uint64_t *pres, const bf_t *a, int flags)
+int bf_get_uint64(uint64_t *pres, const bf_t *a)
 {
     uint64_t v;
     int ret;
-    if (a->expn >= BF_EXP_INF) {
-        ret = 0;
-        if (flags & BF_GET_INT_MOD) {
-            v = 0;
-        } else if (a->expn == BF_EXP_INF) {
-            v = (uint64_t)INT64_MAX + a->sign;
-        } else {
-            v = INT64_MAX;
-        }
+    if (a->expn == BF_EXP_NAN) {
+        goto overflow;
     } else if (a->expn <= 0) {
         v = 0;
         ret = 0;
-    } else if (a->expn <= 63) {
+    } else if (a->sign) {
+        v = 0;
+        ret = BF_ST_INVALID_OP;
+    } else if (a->expn <= 64) {
 #if LIMB_BITS == 32
         if (a->expn <= 32)
             v = a->tab[a->len - 1] >> (LIMB_BITS - a->expn);
@@ -2666,34 +2673,11 @@ int bf_get_uint64(uint64_t *pres, const bf_t *a, int flags)
 #else
         v = a->tab[a->len - 1] >> (LIMB_BITS - a->expn);
 #endif
-        if (a->sign)
-            v = -v;
         ret = 0;
-    } else if (!(flags & BF_GET_INT_MOD)) {
-        ret = BF_ST_OVERFLOW;
-        if (a->sign) {
-            uint64_t v1;
-            v = (uint64_t)INT64_MAX + 1;
-            if (a->expn == 64) {
-                v1 = a->tab[a->len - 1];
-#if LIMB_BITS == 32
-                v1 = (v1 << 32) | get_limbz(a, a->len - 2);
-#endif
-                if (v1 == v)
-                    ret = 0;
-            }
-        } else {
-            v = INT64_MAX;
-        }
     } else {
-        slimb_t bit_pos = a->len * LIMB_BITS - a->expn;
-        v = get_bits(a->tab, a->len, bit_pos);
-#if LIMB_BITS == 32
-        v |= (uint64_t)get_bits(a->tab, a->len, bit_pos + 32) << 32;
-#endif
-        if (a->sign)
-            v = -v;
-        ret = 0;
+    overflow:
+        v = UINT64_MAX;
+        ret = BF_ST_INVALID_OP;
     }
     *pres = v;
     return ret;
@@ -7309,15 +7293,15 @@ typedef double NTTLimb;
 #define NTT_PROOT_2EXP 39
 static const int ntt_int_bits[NB_MODS] = { 254, 203, 152, 101, 50, };
 
-static const limb_t ntt_mods[NB_MODS] = { 0x00073a8000000001, 0x0007858000000001, 0x0007a38000000001, 0x0007a68000000001, 0x0007fd8000000001,
+static const dlimb_t ntt_mods[NB_MODS] = { 0x00073a8000000001, 0x0007858000000001, 0x0007a38000000001, 0x0007a68000000001, 0x0007fd8000000001,
 };
 
-static const limb_t ntt_proot[2][NB_MODS] = {
+static const dlimb_t ntt_proot[2][NB_MODS] = {
     { 0x00056198d44332c8, 0x0002eb5d640aad39, 0x00047e31eaa35fd0, 0x0005271ac118a150, 0x00075e0ce8442bd5, },
     { 0x000461169761bcc5, 0x0002dac3cb2da688, 0x0004abc97751e3bf, 0x000656778fc8c485, 0x0000dc6469c269fa, },
 };
 
-static const limb_t ntt_mods_cr[NB_MODS * (NB_MODS - 1) / 2] = {
+static const dlimb_t ntt_mods_cr[NB_MODS * (NB_MODS - 1) / 2] = {
  0x00020e4da740da8e, 0x0004c3dc09c09c1d, 0x000063bd097b4271, 0x000799d8f18f18fd,
  0x0005384222222264, 0x000572b07c1f07fe, 0x00035cd08888889a,
  0x00066015555557e3, 0x000725960b60b623,
@@ -7336,15 +7320,15 @@ typedef limb_t NTTLimb;
 #define NTT_PROOT_2EXP 51
 static const int ntt_int_bits[NB_MODS] = { 307, 246, 185, 123, 61, };
 
-static const limb_t ntt_mods[NB_MODS] = { 0x28d8000000000001, 0x2a88000000000001, 0x2ed8000000000001, 0x3508000000000001, 0x3aa8000000000001,
+static const dlimb_t ntt_mods[NB_MODS] = { 0x28d8000000000001, 0x2a88000000000001, 0x2ed8000000000001, 0x3508000000000001, 0x3aa8000000000001,
 };
 
-static const limb_t ntt_proot[2][NB_MODS] = {
+static const dlimb_t ntt_proot[2][NB_MODS] = {
     { 0x1b8ea61034a2bea7, 0x21a9762de58206fb, 0x02ca782f0756a8ea, 0x278384537a3e50a1, 0x106e13fee74ce0ab, },
     { 0x233513af133e13b8, 0x1d13140d1c6f75f1, 0x12cde57f97e3eeda, 0x0d6149e23cbe654f, 0x36cd204f522a1379, },
 };
 
-static const limb_t ntt_mods_cr[NB_MODS * (NB_MODS - 1) / 2] = {
+static const dlimb_t ntt_mods_cr[NB_MODS * (NB_MODS - 1) / 2] = {
  0x08a9ed097b425eea, 0x18a44aaaaaaaaab3, 0x2493f57f57f57f5d, 0x126b8d0649a7f8d4,
  0x09d80ed7303b5ccc, 0x25b8bcf3cf3cf3d5, 0x2ce6ce63398ce638,
  0x0e31fad40a57eb59, 0x02a3529fd4a7f52f,
@@ -7360,15 +7344,15 @@ static const limb_t ntt_mods_cr[NB_MODS * (NB_MODS - 1) / 2] = {
 #define NTT_PROOT_2EXP 20
 static const int ntt_int_bits[NB_MODS] = { 148, 119, 89, 59, 29, };
 
-static const limb_t ntt_mods[NB_MODS] = { 0x0000000032b00001, 0x0000000033700001, 0x0000000036d00001, 0x0000000037300001, 0x000000003e500001,
+static const dlimb_t ntt_mods[NB_MODS] = { 0x0000000032b00001, 0x0000000033700001, 0x0000000036d00001, 0x0000000037300001, 0x000000003e500001,
 };
 
-static const limb_t ntt_proot[2][NB_MODS] = {
+static const dlimb_t ntt_proot[2][NB_MODS] = {
     { 0x0000000032525f31, 0x0000000005eb3b37, 0x00000000246eda9f, 0x0000000035f25901, 0x00000000022f5768, },
     { 0x00000000051eba1a, 0x00000000107be10e, 0x000000001cd574e0, 0x00000000053806e6, 0x000000002cd6bf98, },
 };
 
-static const limb_t ntt_mods_cr[NB_MODS * (NB_MODS - 1) / 2] = {
+static const dlimb_t ntt_mods_cr[NB_MODS * (NB_MODS - 1) / 2] = {
  0x000000000449559a, 0x000000001eba6ca9, 0x000000002ec18e46, 0x000000000860160b,
  0x000000000d321307, 0x000000000bf51120, 0x000000000f662938,
  0x000000000932ab3e, 0x000000002f40eef8,
@@ -7494,14 +7478,14 @@ static inline limb_t mul_mod_fast3(limb_t a, limb_t b,
     return r;
 }
 
-static inline limb_t init_mul_mod_fast2(limb_t b, limb_t m)
+static inline limb_t init_mul_mod_fast2(dlimb_t b, dlimb_t m)
 {
-    return ((dlimb_t)b << LIMB_BITS) / m;
+    return (b << LIMB_BITS) / m;
 }
 
 #ifdef __AVX2__
 
-static inline limb_t ntt_limb_to_int(NTTLimb a, limb_t m)
+static inline limb_t ntt_limb_to_int(NTTLimb a, dlimb_t m)
 {
     slimb_t v;
     v = a;
@@ -7512,16 +7496,16 @@ static inline limb_t ntt_limb_to_int(NTTLimb a, limb_t m)
     return v;
 }
 
-static inline NTTLimb int_to_ntt_limb(limb_t a, limb_t m)
+static inline NTTLimb int_to_ntt_limb(limb_t a, dlimb_t m)
 {
-    return (slimb_t)a;
+    return a;
 }
 
-static inline NTTLimb int_to_ntt_limb2(limb_t a, limb_t m)
+static inline NTTLimb int_to_ntt_limb2(dlimb_t a, dlimb_t m)
 {
     if (a >= (m / 2))
         a -= m;
-    return (slimb_t)a;
+    return a;
 }
 
 /* return r + m if r < 0 otherwise r. */
@@ -7588,7 +7572,7 @@ static no_inline int ntt_fft(BFNTTState *s,
     limb_t nb_blocks, fft_per_block, p, k, n, stride_in, i, j;
     NTTLimb *tab_in, *tab_out, *tmp, *trig;
     __m256d m_inv, mf, m2f, c, a0, a1, b0, b1;
-    limb_t m;
+    dlimb_t m;
     int l;
 
     m = ntt_mods[m_idx];
@@ -7695,7 +7679,8 @@ static void ntt_vec_mul(BFNTTState *s,
                         NTTLimb *tab1, NTTLimb *tab2, limb_t fft_len_log2,
                         int k_tot, int m_idx)
 {
-    limb_t i, c_inv, n, m;
+	limb_t i, c_inv, n;
+	dlimb_t m;
     __m256d m_inv, mf, a, b, c;
 
     m = ntt_mods[m_idx];
@@ -7749,14 +7734,14 @@ static void ntt_free(BFNTTState *s, void *ptr)
     bf_free(s->ctx, ptr);
 }
 
-static inline limb_t ntt_limb_to_int(NTTLimb a, limb_t m)
+static inline limb_t ntt_limb_to_int(NTTLimb a, dlimb_t m)
 {
     if (a >= m)
         a -= m;
     return a;
 }
 
-static inline NTTLimb int_to_ntt_limb(slimb_t a, limb_t m)
+static inline NTTLimb int_to_ntt_limb(slimb_t a, dlimb_t m)
 {
     return a;
 }
@@ -7765,7 +7750,8 @@ static no_inline int ntt_fft(BFNTTState *s, NTTLimb *out_buf, NTTLimb *in_buf,
                              NTTLimb *tmp_buf, int fft_len_log2,
                              int inverse, int m_idx)
 {
-    limb_t nb_blocks, fft_per_block, p, k, n, stride_in, i, j, m, m2;
+	limb_t nb_blocks, fft_per_block, p, k, n, stride_in, i, j;
+	dlimb_t m, m2;
     NTTLimb *tab_in, *tab_out, *tmp, a0, a1, b0, b1, c, *trig, c_inv;
     int l;
 
@@ -7824,7 +7810,8 @@ static void ntt_vec_mul(BFNTTState *s,
                         NTTLimb *tab1, NTTLimb *tab2, int fft_len_log2,
                         int k_tot, int m_idx)
 {
-    limb_t i, norm, norm_inv, a, n, m, m_inv;
+	limb_t i, norm, norm_inv, a, n;
+	dlimb_t m, m_inv;
 
     m = ntt_mods[m_idx];
     m_inv = s->ntt_mods_div[m_idx];
@@ -7862,7 +7849,8 @@ static no_inline NTTLimb *get_trig(BFNTTState *s,
                                    int k, int inverse, int m_idx)
 {
     NTTLimb *tab;
-    limb_t i, n2, c, c_mul, m, c_mul_inv;
+    limb_t i, n2, c, c_mul, c_mul_inv;
+	dlimb_t m;
 
     if (k > NTT_TRIG_K_MAX)
         return NULL;
@@ -7926,7 +7914,8 @@ static int ntt_fft_partial(BFNTTState *s, NTTLimb *buf1,
                            int k1, int k2, limb_t n1, limb_t n2, int inverse,
                            limb_t m_idx)
 {
-    limb_t i, j, c_mul, c0, m, m_inv, strip_len, l;
+    limb_t i, j, c_mul, c0, strip_len, l;
+	dlimb_t m, m_inv;
     NTTLimb *buf2, *buf3;
 
     buf2 = NULL;
@@ -8021,7 +8010,8 @@ static no_inline void limb_to_ntt(BFNTTState *s,
     slimb_t i, n;
     dlimb_t a, b;
     int j, shift;
-    limb_t base_mask1, a0, a1, a2, r, m, m_inv;
+	limb_t base_mask1, a0, a1, a2, r;
+	dlimb_t m, m_inv;
 
 #if 0
     for(i = 0; i < a_len; i++) {
@@ -8086,7 +8076,7 @@ static no_inline void ntt_to_limb(BFNTTState *s, limb_t *tabr, limb_t r_len,
                                   const NTTLimb *buf, int fft_len_log2, int dpl,
                                   int nb_mods)
 {
-    const limb_t *mods = ntt_mods + NB_MODS - nb_mods;
+    const dlimb_t *mods = ntt_mods + NB_MODS - nb_mods;
     const __m256d *mods_cr_vec, *mf, *m_inv;
     VecUnion y[NB_MODS];
     limb_t u[NB_MODS], carry[NB_MODS], fft_len, base_mask1, r;
@@ -8190,8 +8180,8 @@ static no_inline void ntt_to_limb(BFNTTState *s, limb_t *tabr, limb_t r_len,
                                   const NTTLimb *buf, int fft_len_log2, int dpl,
                                   int nb_mods)
 {
-    const limb_t *mods = ntt_mods + NB_MODS - nb_mods;
-    const limb_t *mods_cr, *mods_cr_inv;
+    const dlimb_t *mods = ntt_mods + NB_MODS - nb_mods;
+    const dlimb_t *mods_cr, *mods_cr_inv;
     limb_t y[NB_MODS], u[NB_MODS], carry[NB_MODS], fft_len, base_mask1, r;
     slimb_t i, len, pos;
     int j, k, l, shift, n_limb1;
@@ -8290,7 +8280,8 @@ static int ntt_static_init(bf_context_t *s1)
 {
     BFNTTState *s;
     int inverse, i, j, k, l;
-    limb_t c, c_inv, c_inv2, m, m_inv;
+	limb_t c, c_inv, c_inv2;
+	dlimb_t m, m_inv;
 
     if (s1->ntt_state)
         return 0;
@@ -8507,3 +8498,5 @@ int bf_get_fft_size(int *pdpl, int *pnb_mods, limb_t len)
 }
 
 #endif /* !USE_FFT_MUL */
+
+#endif
