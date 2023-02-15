@@ -1,13 +1,14 @@
 Tiny Big Float library
 ----------------------
-Copyright (c) 2017-2018 Fabrice Bellard
 
-LibBF is a small library to handle arbitrary precision floating point
-numbers. Its compiled size is about 60 KB of x86 code and has no
-dependency on other libraries. It is not the fastest library nor the
-smaller but it tries to be simple while using asymptotically optimal
-algorithms. The basic arithmetic operations have a near linear running
-time.
+Copyright (c) 2017-2020 Fabrice Bellard
+
+LibBF is a small library to handle arbitrary precision binary or
+decimal floating point numbers. Its compiled size is about 90 KB of
+x86 code and has no dependency on other libraries. It is not the
+fastest library nor the smallest but it tries to be simple while using
+asymptotically optimal algorithms. The basic arithmetic operations
+have a near linear running time.
 
 The TinyPI example computes billions of digits of Pi using the
 Chudnovsky formula.
@@ -16,7 +17,8 @@ Chudnovsky formula.
 -----------
 
 - Arbitrary precision floating point numbers in base 2 using the IEEE
-  754 semantics (including subnormal numbers, infinities and NaN).
+  754 semantics (including subnormal numbers, infinities and
+  NaN).
 - All operations are exactly rounded using the 5 IEEE 754 rounding
   modes (round to nearest with ties to even or away from zero, round
   to zero, -/+ infinity). The additional non-deterministic faithful
@@ -32,13 +34,18 @@ Chudnovsky formula.
 - Exactly rounded floating point input and output in any base between
   2 and 36 with near linear runnning time. Floating point output can
   select the smallest amount of digits to get the required precision.
-- Trancendental functions are supported (exp, log, pow, sin, cos, tan,
+- Transcendental functions are supported (exp, log, pow, sin, cos, tan,
   asin, acos, atan, atan2).
 - Operations on arbitrarily large integers are supported by using a
   special "infinite" precision. Integer division with remainder and
   logical operations (assuming two complement binary representation)
   are implemented.
-- Easy to embed (a few C files need to be copied).
+- Arbitrary precision floating point numbers in base 10 corresponding
+  to the IEEE 754 2008 semantics with the limitation that the mantissa
+  is always normalized. The basic arithmetic operations, output and
+  input are supported with a quadratic running time.
+- Easy to embed: a few C files need to be copied, the memory allocator
+  can be redefined, the memory allocation failures are tested.
 - MIT license.
 
 2) Compilation
@@ -130,9 +137,6 @@ at least the Intel Haswell generation is necessary for AVX2.
 5) Known limitations
 --------------------
 
-- The square root lacks a proper basecase implementation so it is
-  (relatively) slow for small numbers.
-
 - In some operations (such as the transcendental ones), there is no
   rigourous proof of the rounding error. We expect to improve it by
   reusing ideas from the MPFR algorithms. Some unlikely
@@ -145,8 +149,8 @@ at least the Intel Haswell generation is necessary for AVX2.
   splitting algorithm for exp and sin/cos (see [1]) and to use a
   Newton based inversion to get log and atan.
 
-- Memory allocation errors are not handled yet (the status flag
-  BF_ST_MEM_ERROR could be used to report them).
+- Memory allocation errors are not always correctly reported for the
+  transcendental operations.
 
 6) References
 -------------
