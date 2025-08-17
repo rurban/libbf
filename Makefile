@@ -23,7 +23,7 @@
 # Enable Windows compilation
 #CONFIG_WIN32=y
 # build AVX2 version
-CONFIG_AVX2=y
+#CONFIG_AVX2=y
 # Enable profiling with gprof
 #CONFIG_PROFILE=y
 # compile the bftest utility to do regression tests and benchmarks. Must have
@@ -44,9 +44,13 @@ endif
 CC=$(CROSS_PREFIX)gcc
 CFLAGS=-Wall -g $(PROFILE) -MMD
 CFLAGS+=-O2
-CFLAGS+=-flto
+#CFLAGS+=-flto
 #CFLAGS+=-Os
 LDFLAGS=
+ifdef CONFIG_M32
+CFLAGS+=-m32
+LDFLAGS+=-m32
+endif
 ifdef CONFIG_PROFILE
 CFLAGS+=-p
 LDFLAGS+=-p
@@ -59,24 +63,27 @@ LDFLAGS+=-fsanitize=address
 endif
 LIBS=-lm
 
-PROGS+=bfbench$(EXE) tinypi$(EXE)
+PROGS+=bfbench$(EXE) bfpi$(EXE)
+PROGS+=bfcalc$(EXE)
 ifdef CONFIG_BFTEST
 PROGS+=bftest$(EXE)
-ifdef CONFIG_M32
-PROGS+=bftest32$(EXE)
-endif
 endif
 ifdef CONFIG_AVX2
-PROGS+=bfbench-avx2$(EXE) tinypi-avx2$(EXE)
+ifndef CONFIG_M32
+PROGS+=bfbench-avx2$(EXE) bfpi-avx2$(EXE)
+endif
 endif
 
 all: $(PROGS)
 
-tinypi$(EXE): tinypi.o libbf.o cutils.o
+bfpi$(EXE): bfpi.o libbf.o cutils.o
 	$(CC) $(LDFLAGS) -o $@ $^ $(LIBS)
 
-tinypi-avx2$(EXE): tinypi.avx2.o libbf.avx2.o cutils.avx2.o
+bfpi-avx2$(EXE): bfpi.avx2.o libbf.avx2.o cutils.avx2.o
 	$(CC) $(LDFLAGS) -o $@ $^ $(LIBS)
+
+bfcalc$(EXE): bfcalc.o readline_tty.o readline.o libbf.o cutils.o
+	$(CC) $(LDFLAGS) -o $@ $^ -lm
 
 BFTEST_LIBS:=$(LIBS)
 
@@ -87,10 +94,6 @@ bfbench.o bfbench.avx2.o: CFLAGS+=-DCONFIG_MPFR
 bftest$(EXE): bftest.o libbf.o cutils.o softfp.o
 	$(CC) $(LDFLAGS) -o $@ $^ -lmpdec $(BFTEST_LIBS)
 
-ifdef CONFIG_M32
-bftest32$(EXE): bftest.m32.o libbf.m32.o cutils.m32.o softfp.m32.o
-	$(CC) $(LDFLAGS) -m32 -o $@ $^ -lmpdec $(BFTEST_LIBS)
-endif
 endif
 
 bfbench$(EXE): bfbench.o libbf.o cutils.o
@@ -100,31 +103,28 @@ bfbench-avx2$(EXE): bfbench.avx2.o libbf.avx2.o  cutils.avx2.o
 	$(CC) $(LDFLAGS) -o $@ $^ $(BFTEST_LIBS)
 
 test: all
-	time ./tinypi 1e5 pi_1e5.txt
+	time ./bfpi 1e5 pi_1e5.txt
 	sha1sum -c pi_1e5.sha1sum
 ifdef CONFIG_AVX2
-	time ./tinypi-avx2 1e5 pi_1e5.txt
+	time ./bfpi-avx2 1e5 pi_1e5.txt
 	sha1sum -c pi_1e5.sha1sum
 endif
 #
-	time ./tinypi 1e6 pi_1e6.txt
+	time ./bfpi 1e6 pi_1e6.txt
 	sha1sum -c pi_1e6.sha1sum
 ifdef CONFIG_AVX2
-	time ./tinypi-avx2 1e6 pi_1e6.txt
+	time ./bfpi-avx2 1e6 pi_1e6.txt
 	sha1sum -c pi_1e6.sha1sum
 #
-	time ./tinypi-avx2 1e7 pi_1e7.txt
+	time ./bfpi-avx2 1e7 pi_1e7.txt
 	sha1sum -c pi_1e7.sha1sum
 #
-#	time ./tinypi-avx2 1e8 pi_1e8.txt
+#	time ./bfpi-avx2 1e8 pi_1e8.txt
 #	sha1sum -c pi_1e8.sha1sum
 endif
 
 %.o: %.c
 	$(CC) $(CFLAGS) -c -o $@ $<
-
-%.m32.o: %.c
-	$(CC) -m32 $(CFLAGS) -c -o $@ $<
 
 %.avx2.o: %.c
 	$(CC) $(CFLAGS) -mavx -mavx2 -mfma -mbmi2 -c -o $@ $<

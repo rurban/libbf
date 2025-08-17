@@ -1,7 +1,6 @@
 Tiny Big Float library
 ----------------------
-
-Copyright (c) 2017-2020 Fabrice Bellard
+Copyright (c) 2017-2025 Fabrice Bellard
 
 LibBF is a small library to handle arbitrary precision binary or
 decimal floating point numbers. Its compiled size is about 90 KB of
@@ -10,7 +9,13 @@ fastest library nor the smallest but it tries to be simple while using
 asymptotically optimal algorithms. The basic arithmetic operations
 have a near linear running time.
 
-The TinyPI example computes billions of digits of Pi using the
+The BFCalc example is a calculator application with a Javascript like
+syntax. It supports arbitrarily large integers, decimal and binary
+arbitrary precision floating point numbers, multi-dimensional arrays
+(matrices and tensors), polynomials, series, plot, unit
+conversion. The help is available at http://numcalc.com .
+
+The BFPI example computes billions of digits of Pi using the
 Chudnovsky formula.
 
 1) Features
@@ -56,9 +61,9 @@ the MPFR library is used to compile the test tools (bftest and
 bfbench) but it is not needed to build libbf. The included SoftFP code
 (softfp* files) is only used by the bftest test tool.
 
-TinyPI example: the "tinypi" executable uses the portable code. The
-"tinypi-avx2" executable uses the AVX2 implementation. An x86 CPU of
-at least the Intel Haswell generation is necessary for AVX2.
+BFPI example: the "bfpi" executable uses the portable code. The
+"bfpi-avx2" executable uses the AVX2 implementation. An x86 CPU of at
+least the Intel Haswell generation is necessary for AVX2.
 
 3) Design principles
 --------------------
