@@ -3104,7 +3104,7 @@ static BCValue tensor_zeros(BCContext *ctx, int n_args, BCValue *args)
 {
     int i;
     BCValue val;
-    int a, dims[MAX_DIMS];
+    int a, dims[MAX_DIMS] = {0};
     
     if (n_args > MAX_DIMS) {
         val = cval_type_error(ctx, "too many axis in tensor");
@@ -9624,7 +9624,7 @@ static void parse_statement(ParseState *s)
                     idx = find_global_var(s->ctx, s->token.ident);
                     if (idx < 0)
                         idx = add_global_var(s->ctx, s->token.ident);
-                        assert(idx >= 0);
+                    assert(idx >= 0);
                 } else {
                     idx = find_var(s, s->token.ident);
                     if (idx >= 0)
