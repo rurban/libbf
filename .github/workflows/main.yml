@@ -1,0 +1,25 @@
+name: Github CI
+on: [push, pull_request]
+
+jobs:
+  linux:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        CC:
+          - gcc
+          - clang
+        MAKEVARS:
+          -
+          - CONFIG_ASAN=y
+          - CONFIG_M32=y
+    steps:
+    - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+      with:
+        fetch-depth: 1
+    - if: ${{ matrix.MAKEVARS }} == CONFIG_M32=y
+      run: sudo apt install gcc-multilib
+    - run: make ${{ matrix.MAKEVARS }}
+    - run: make test
