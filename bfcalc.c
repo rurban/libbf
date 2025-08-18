@@ -427,6 +427,7 @@ static BCValue cval_call(BCContext *ctx, BCValue func_val,
 
 static void *my_bf_realloc(void *opaque, void *ptr, size_t size)
 {
+    (void)opaque;
     return realloc(ptr, size);
 }
 
@@ -469,6 +470,8 @@ static BCType *ctype_new(BCContext *ctx, BCTypeEnum tag,
                          const BCType *elem_type)
 {
     BCType *t;
+    (void)ctx;
+
     t = malloc(sizeof(*t));
     t->ref_count = 1;
     t->tag = tag;
@@ -492,6 +495,7 @@ static BCType *ctype_new_free(BCContext *ctx, BCTypeEnum tag,
 static BCValue cval_new1(BCContext *ctx, const BCType *type)
 {
     BCValue v = malloc(sizeof(*v));
+    (void)ctx;
     v->ref_count = 1;
     v->type = ctype_dup(type);
     return v;
@@ -1132,6 +1136,7 @@ static int64_t cint_ctz1(BCContext *ctx, BCValueConst v1)
 {
     const bf_t *a = &v1->u.cint;
     slimb_t res;
+    (void)ctx;
     if (bf_is_zero(a)) {
         res = -1;
     } else {
@@ -1215,7 +1220,8 @@ static BOOL cint_divide(BCContext *ctx, BCValue a, BCValue b)
 static BOOL is_prime(BCContext *ctx, BCValueConst n, int t)
 {
     assert(cval_type(n) == CTYPE_INT);
-    int i, d;
+    size_t i;
+    int d;
 
     if (t == 0)
         t = 64;
@@ -2503,6 +2509,7 @@ static void cstring_toString(BCContext *ctx, DynBuf *d, BCValueConst v)
 {
     const BCString *str = &v->u.string;
     int i, c;
+    (void)ctx;
 
     dbuf_putc(d, '\"');
     for(i = 0; i < str->len; i++) {
@@ -2568,6 +2575,7 @@ static int cstring_len(BCContext *ctx, BCValueConst v1)
 {
     const BCString *st = &v1->u.string;
     int c, i, len;
+    (void)ctx;
 
     len = 0;
     for(i = 0; i < st->len; i++) {
@@ -5141,7 +5149,8 @@ static BCValue poly_root_laguerre1(BCContext *ctx, BCValueConst p,
 static BCValue poly_roots(BCContext *ctx, int n_args, BCValue *args)
 {
     static const double start_points[] = { 0.1, -1.4, 1.7 };
-    int d, i, j;
+    size_t j;
+    int d, i;
     BCValue roots = BC_EXCEPTION, a, z, r, eps, p, pd;
     BCType *elem_type = NULL;
     
@@ -7401,7 +7410,8 @@ static BCValue cval_call_bytecode_function(BCContext *ctx, BCValue func_val,
 static __maybe_unused void dump_bytecode_function(BCContext *ctx, BCValue v)
 {
     BCBytecodeFunction *f;
-    int pos, opcode, len, fmt;
+    unsigned long pos;
+    int opcode, len, fmt;
 
     f = &v->u.bytecode_function;
     printf("n_args=%d n_locals=%d cpool_len=%d\n",
@@ -7409,7 +7419,7 @@ static __maybe_unused void dump_bytecode_function(BCContext *ctx, BCValue v)
     for(pos = 0; pos < f->byte_code.size;) {
         opcode = f->byte_code.buf[pos];
         len = opcode_info[opcode].size;
-        printf("%5d: ", pos);
+        printf("%5lu: ", pos);
         if (opcode < OP_COUNT)
             printf("%s", opcode_info[opcode].name);
         else
@@ -7450,7 +7460,7 @@ static __maybe_unused void dump_bytecode_function(BCContext *ctx, BCValue v)
             {
                 uint32_t idx = get_u32(f->byte_code.buf + pos + 1);
                 printf(" ");
-                if (idx < f->cpool_len) {
+                if ((int)idx < f->cpool_len) {
                     BCValueConst v = f->cpool[idx];
                     BOOL saved_hex_output = ctx->hex_output;
                     /* display float constant in binary to see the
@@ -7810,7 +7820,7 @@ static BCValue cval_setprec1(BCContext *ctx, BCValue v, BOOL is_float)
             }
         }
     } else {
-        if (prec < BF_PREC_MIN || prec > BF_PREC_MAX) {
+        if (prec < (int)BF_PREC_MIN || prec > (int)BF_PREC_MAX) {
             cval_range_error(ctx, "unsupported precision %d", prec);
             goto fail;
         }
@@ -8073,7 +8083,7 @@ static char *remove_spaces(char *buf, size_t buf_size, const char *str)
     q = buf;
     while (*p != '\0') {
         if (!convert_is_space(*p)) {
-            if ((q - buf) >= buf_size - 1)
+            if ((q - buf) >= (long)(buf_size - 1))
                 break;
             *q++ = *p;
         }
@@ -8097,7 +8107,7 @@ static char *to_lower(char *str)
 /* return -1 if not found */
 static int find_unit_name(const char *name, BOOL is_long)
 {
-    int i;
+    size_t i;
     char buf[UNIT_NAME_SIZE];
     const char *str;
     
@@ -8140,7 +8150,8 @@ static int find_unit(UnitValue *r, const char *unit);
 /* return 0 if found and 'r' is filled, -1 if not found.  */
 static int find_unit1(UnitValue *r, const char *unit)
 {
-    int i, j;
+    size_t i, j;
+    int k;
     char name[UNIT_NAME_SIZE];
     char namel[UNIT_NAME_SIZE];
     const char *str;
@@ -8172,12 +8183,12 @@ static int find_unit1(UnitValue *r, const char *unit)
        
     /* see if exact abbreviation or name found */
 
-    if ((i = find_unit_name(name, FALSE)) >= 0 ||
-        (i = find_unit_name(namel, TRUE)) >= 0) {
-        if (find_unit(r, unit_table[i].unit))
+    if ((k = find_unit_name(name, FALSE)) >= 0 ||
+        (k = find_unit_name(namel, TRUE)) >= 0) {
+        if (find_unit(r, unit_table[k].unit))
             return -1;
-        r->addend = unit_table[i].addend; /* specific hack for degrees */
-        r->val *= unit_table[i].val;
+        r->addend = unit_table[k].addend; /* specific hack for degrees */
+        r->val *= unit_table[k].val;
         return 0;
     }
     
@@ -8199,12 +8210,12 @@ static int find_unit1(UnitValue *r, const char *unit)
     /* not found: try a long prefix + name */
     for(j = 0; j < countof(prefix_table); j++) {
         if (strstart(namel, prefix_table[j].name, &str)) {
-            i = find_unit_name(str, TRUE);
-            if (i < 0)
+            k = find_unit_name(str, TRUE);
+            if (k < 0)
                 break;
-            if (find_unit(r, unit_table[i].unit))
+            if (find_unit(r, unit_table[k].unit))
                 return -1;
-            r->val *= unit_table[i].val * prefix_table[j].val;
+            r->val *= unit_table[k].val * prefix_table[j].val;
             return 0;
         }
     }
@@ -8212,12 +8223,12 @@ static int find_unit1(UnitValue *r, const char *unit)
     /* try an abbreviated prefix + abbreviated unit */
     for(j = 0; j < countof(prefix_table); j++) {
         if (strstart(name, prefix_table[j].abbrev, &str)) {
-            i = find_unit_name(str, FALSE);
-            if (i < 0)
+            k = find_unit_name(str, FALSE);
+            if (k < 0)
                 break;
-            if (find_unit(r, unit_table[i].unit))
+            if (find_unit(r, unit_table[k].unit))
                 return -1;
-            r->val *= unit_table[i].val * prefix_table[j].val;
+            r->val *= unit_table[k].val * prefix_table[j].val;
             return 0;
         }
     }
@@ -8242,7 +8253,7 @@ static int find_unit(UnitValue *r, const char *unit)
     for(;;) {
         q = name;
         while (*p != '^' && *p != '*' && *p != '/' && !(p[0] == 0xc2 && p[1] == 0xb2) && *p != '\0') {
-            if ((q - name) < sizeof(name) - 1)
+            if ((q - name) < (long)(sizeof(name) - 1))
                 *q++ = *p;
             p++;
         }
@@ -8911,7 +8922,8 @@ static void parse_ident(ParseState *s, const char **pp)
 {
     const char *p;
     char *q;
-    int tok, i;
+    size_t i;
+    int tok;
     
     p = *pp;
     q = s->token.ident;
@@ -8919,7 +8931,7 @@ static void parse_ident(ParseState *s, const char **pp)
            (*p >= 'A' && *p <= 'Z') ||
            (*p >= '0' && *p <= '9') ||
            *p == '_') {
-        if ((q - s->token.ident) >= sizeof(s->token.ident) - 1)
+        if ((q - s->token.ident) >= (long)(sizeof(s->token.ident) - 1))
             eval_error(s, "identifier too long");
         *q++ = *p++;
     }
@@ -10281,6 +10293,7 @@ static char readline_history[256];
 
 void readline_find_completion(const char *cmdline)
 {
+    (void)cmdline;
 }
 
 static BOOL is_word(int c)
@@ -10294,6 +10307,7 @@ static BOOL is_word(int c)
 static int term_get_color(int *plen, const char *buf, int pos, int buf_len)
 {
     int c, color, pos1, len;
+    (void)buf_len;
 
     c = buf[pos];
     if (c == '"' || c == '\'') {
@@ -10391,7 +10405,7 @@ static int get_word(char *buf, size_t buf_size, const char **pp)
     
     q = buf;
     while (*p != ' ' && *p != '\0') {
-        if ((q - buf) >= buf_size - 1)
+        if ((q - buf) >= (long)(buf_size - 1))
             return -1;
         *q++ = *p++;
     }
@@ -10466,6 +10480,7 @@ static void plot_output(void *opaque, double xmin, double xmax, double ymin, dou
     uint8_t *bmp;
     double x1, y1, xstart, xincr, ystart, yincr;
     char buf[16];
+    (void)opaque;
     
     ny = get_marks(&ystart, &yincr, ymin, ymax);
     /* max width for the y marks */

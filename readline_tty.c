@@ -120,6 +120,7 @@ static void term_exit(void)
 
 static void sigint_handler(int signo)
 {
+    (void)signo;
     ctrl_c_pressed++;
     if (ctrl_c_pressed >= 4) {
         /* just to be able to stop the process if it is hanged */
@@ -188,6 +189,7 @@ const char *readline_tty(ReadlineState *s,
     int len, i, ctrl_c_count, c, ret;
     const char *ret_str;
     uint8_t buf[128];
+    (void)multi_line;
     
 #ifdef _WIN32
     set_processed_input(FALSE);

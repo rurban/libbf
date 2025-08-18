@@ -149,6 +149,7 @@ void dbuf_init2(DynBuf *s, void *opaque, DynBufReallocFunc *realloc_func)
 
 static void *dbuf_default_realloc(void *opaque, void *ptr, size_t size)
 {
+    (void)opaque;
     return realloc(ptr, size);
 }
 
@@ -226,10 +227,10 @@ int __attribute__((format(printf, 2, 3))) dbuf_printf(DynBuf *s,
         s->error = TRUE;
         return -1; /* error */
     }
-    if (len < sizeof(buf)) {
+    if ((size_t)len < sizeof(buf)) {
         /* fast case */
         return dbuf_put(s, (uint8_t *)buf, len);
-    } else {
+    } else { /* truncated case */
         if (dbuf_realloc(s, s->size + len + 1))
             return -1;
         va_start(ap, fmt);

@@ -43,6 +43,7 @@ static bf_context_t bf_ctx;
 
 static void *my_bf_realloc(void *opaque, void *ptr, size_t size)
 {
+    (void)opaque;
     return realloc(ptr, size);
 }
 

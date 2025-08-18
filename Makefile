@@ -42,7 +42,7 @@ EXE:=
 endif
 
 CC=$(CROSS_PREFIX)gcc
-CFLAGS=-Wall -g $(PROFILE) -MMD
+CFLAGS=-Wall -Wextra -g $(PROFILE) -MMD
 CFLAGS+=-O2
 #CFLAGS+=-flto
 #CFLAGS+=-Os

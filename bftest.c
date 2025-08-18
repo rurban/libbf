@@ -145,23 +145,24 @@ static bf_context_t bf_ctx;
 
 static void *my_bf_realloc(void *opaque, void *ptr, size_t size)
 {
+    (void)opaque;
     return realloc(ptr, size);
 }
 
 int mp_cmp(const limb_t *taba, size_t na, const limb_t *tabb, size_t nb)
 {
-    slimb_t n, i;
-    limb_t a, b;
+    slimb_t i;
+    limb_t a, b, n;
     
     n = na;
     if (nb > n)
         n = nb;
     for(i = n - 1; i >= 0; i--) {
-        if (i < na)
+        if (i < (slimb_t)na)
             a = taba[i];
         else
             a = 0;
-        if (i < nb)
+        if (i < (slimb_t)nb)
             b = tabb[i];
         else
             b = 0;
@@ -685,6 +686,7 @@ int softfp_exec_op(MPFTestOPEnum op, bf_t *r1, bf_t *a1, bf_t *b1,
     int ret = 0;
     uint32_t fflags, rm;
     Float64Union u;
+    (void)prec;
     
     *pcycles -= get_cycles();
     /* Note: the inputs must already be float64 */
@@ -1006,6 +1008,7 @@ void test_atof(limb_t prec, int duration_ms,
     char *str;
     bf_t r, r_ref;
     int64_t ti, ti_ref, nb_limbs, start_time;
+    (void)exp_bits;
     
     mp_randinit(&rnd_state, seed);
 
@@ -1105,6 +1108,7 @@ void test_ftoa(limb_t prec, int duration_ms,
     char *r_str, *r_ref_str;
     bf_t a;
     int64_t ti, ti_ref, start_time;
+    (void)exp_bits;
     
     mp_randinit(&rnd_state, seed);
     bf_init(&bf_ctx, &a);
@@ -2001,6 +2005,7 @@ int main(int argc, char **argv)
         switch(c) {
         case 'h':
             help();
+            return 1;
         case 's':
             seed = strtoul(optarg, NULL, 0);
             duration_ms = 1000;

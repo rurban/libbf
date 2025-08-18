@@ -41,6 +41,7 @@ static bf_context_t bf_ctx;
 
 static void *my_bf_realloc(void *opaque, void *ptr, size_t size)
 {
+    (void)opaque;
     return realloc(ptr, size);
 }
 
@@ -55,7 +56,7 @@ static int64_t get_clock_msec(void)
    if larger than 9999T. The value is rounded to zero. */
 char *get_si_prefix(char *buf, int buf_size, uint64_t val)
 {
-    static const char suffixes[4] = "kMGT";
+    static const char suffixes[] = "kMGT";
     uint64_t base;
     int i;
 
