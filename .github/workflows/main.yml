@@ -4,7 +4,7 @@ on: [push, pull_request]
 jobs:
   linux:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 10
     strategy:
       fail-fast: false
       matrix:
@@ -14,12 +14,25 @@ jobs:
         MAKEVARS:
           -
           - CONFIG_ASAN=y
+          - CONFIG_AVX2=y
+          - CONFIG_BFTEST=y
           - CONFIG_M32=y
     steps:
     - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
       with:
         fetch-depth: 1
-    - if: ${{ matrix.MAKEVARS }} == CONFIG_M32=y
+    - if: contains(matrix.MAKEVARS, 'CONFIG_M32=y')
       run: sudo apt install gcc-multilib
+    - if: contains(matrix.MAKEVARS, 'CONFIG_BFTEST=y')
+      run: |
+        sudo apt install libmpfr-dev
+        wget https://www.bytereef.org/software/mpdecimal/releases/mpdecimal-4.0.1.tar.gz
+        tar xfz mpdecimal-4.0.1.tar.gz
+        cd mpdecimal-4.0.1
+        ./configure --libdir=/usr/lib
+        make
+        sudo make install
     - run: make ${{ matrix.MAKEVARS }}
-    - run: make test
+    - run: make ${{ matrix.MAKEVARS }} test
+    - if: contains(matrix.MAKEVARS, 'CONFIG_BFTEST=y')
+      run: ./bftest -S
