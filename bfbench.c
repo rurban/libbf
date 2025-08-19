@@ -320,7 +320,8 @@ static void mpfr_bench(double k_start, double k_end,
     }
     fclose(f);
 
-    system("gnuplot /tmp/gnuplot.cmd");
+    if (system("gnuplot /tmp/gnuplot.cmd"))
+        fprintf(stderr, "Warning: gnuplot failed\n");
 }
 
 #endif /* CONFIG_MPFR */

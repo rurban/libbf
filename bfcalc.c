@@ -633,6 +633,7 @@ static __attribute__((format(printf, 3, 4))) BCValue cval_throw_error(BCContext 
     va_start(ap, fmt);
     vsnprintf(error_msg, sizeof(error_msg), fmt, ap);
     va_end(ap);
+    // if len < 0, i.e. fmt is wrong or too big, don't throw twice.
     return cval_throw_error_buf(ctx, error_type, error_msg);
 }
 
@@ -10580,7 +10581,7 @@ static uint8_t *load_file(const char *filename, int *plen)
 {
     FILE *f;
     uint8_t *buf;
-    int buf_len;
+    int buf_len, len;
 
     f = fopen(filename, "rb");
     if (!f) {
@@ -10591,7 +10592,11 @@ static uint8_t *load_file(const char *filename, int *plen)
     buf_len = ftell(f);
     fseek(f, 0, SEEK_SET);
     buf = malloc(buf_len + 1);
-    fread(buf, 1, buf_len, f);
+    len = fread(buf, 1, buf_len, f);
+    if (len != buf_len) {
+        perror("fread");
+        exit(1);
+    }
     buf[buf_len] = '\0';
     fclose(f);
     if (plen)
