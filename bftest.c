@@ -238,32 +238,88 @@ typedef struct mp_randstate_t {
     uint64_t val;
 } mp_randstate_t;
 
+/* 64-bit mersenne twister */
+#define NN 312
+#define MM 156
+#define MATRIX_A 0xB5026F5AA96619E9ULL
+#define UM 0xFFFFFFFF80000000ULL /* Most significant 33 bits */
+#define LM 0x7FFFFFFFULL /* Least significant 31 bits */
+
+/* The array for the state vector */
+static uint64_t mt[NN];
+/* to detect uninitialized mt */
+static int mti = NN+1;
+
+/* initializes mt[NN] with a seed */
+static void mp_msrand64_init(uint64_t seed)
+{
+    mt[0] = seed;
+    for (mti=1; mti<NN; mti++)
+        mt[mti] =  (UINT64_C(6364136223846793005) * (mt[mti-1] ^ (mt[mti-1] >> 62)) + mti);
+}
+
+static uint64_t mp_msrand64(void)
+{
+    int i;
+    uint64_t x;
+    static uint64_t mag01[2] = {UINT64_C(0), MATRIX_A};
+
+    if (mti >= NN) { /* generate NN words at one time */
+
+        /* if init_genrand64() has not been called, */
+        /* a default initial seed is used     */
+        if (mti == NN+1)
+            mp_msrand64_init(UINT64_C(5489));
+
+        for (i=0;i<NN-MM;i++) {
+            x = (mt[i]&UM)|(mt[i+1]&LM);
+            mt[i] = mt[i+MM] ^ (x>>1) ^ mag01[(int)(x & UINT64_C(1))];
+        }
+        for (;i<NN-1;i++) {
+            x = (mt[i]&UM)|(mt[i+1]&LM);
+            mt[i] = mt[i+(MM-NN)] ^ (x>>1) ^ mag01[(int)(x & UINT64_C(1))];
+        }
+        x = (mt[NN-1]&UM)|(mt[0]&LM);
+        mt[NN-1] = mt[MM-1] ^ (x>>1) ^ mag01[(int)(x & UINT64_C(1))];
+
+        mti = 0;
+    }
+    x = mt[mti++];
+    x ^= (x >> 29) & 0x5555555555555555ULL;
+    x ^= (x << 17) & 0x71D67FFFEDA60000ULL;
+    x ^= (x << 37) & 0xFFF7EEE000000000ULL;
+    x ^= (x >> 43);
+    return x;
+}
+
 void mp_randinit(mp_randstate_t *state, uint64_t seed)
 {
     state->val = seed;
+    mp_msrand64_init(seed);
 }
 
-static inline uint64_t mp_random64(mp_randstate_t *s)
-{
-    s->val = s->val * 6364136223846793005 + 1;
-    /* avoid bad modulo properties 
-       XXX: use mersenne twistter generator */
-    return (s->val << 32) | (s->val >> 32);
-}
+//static inline uint64_t mp_random64(mp_randstate_t *s)
+//{
+//    s->val = s->val * 6364136223846793005 + 1;
+//    /* avoid bad modulo properties 
+//       XXX: use mersenne twistter generator */
+//    return (s->val << 32) | (s->val >> 32);
+//}
 
 /* random number between 0 and 1 with large sequences of identical bits */
 static void mp_rrandom(limb_t *tab, limb_t prec, mp_randstate_t *state)
 {
     slimb_t n, max_run_len, cur_len, j, len, bit_index, nb_bits;
     int cur_state, m;
+    (void)state;
     
     n = (prec + LIMB_BITS - 1) / LIMB_BITS;
     /* same idea as GMP. It would be probably better to use a non
        uniform law */
-    m = mp_random64(state) % 4 + 1;
+    m = mp_msrand64() % 4 + 1;
     max_run_len = bf_max(prec / m, 1);
-    cur_state = mp_random64(state) & 1;
-    cur_len = mp_random64(state) % max_run_len + 1;
+    cur_state = mp_msrand64() & 1;
+    cur_len = mp_msrand64() % max_run_len + 1;
     nb_bits = n * LIMB_BITS;
     
     memset(tab, 0, sizeof(limb_t) * n);
@@ -280,7 +336,7 @@ static void mp_rrandom(limb_t *tab, limb_t prec, mp_randstate_t *state)
         bit_index += len;
         cur_len -= len;
         if (cur_len == 0) {
-            cur_len = mp_random64(state) % max_run_len + 1;
+            cur_len = mp_msrand64() % max_run_len + 1;
             cur_state ^= 1;
         }
     }
@@ -301,9 +357,9 @@ static void bf_rrandom(bf_t *a, limb_t prec, mp_randstate_t *state)
 static void bf_rrandom_large(bf_t *a, limb_t prec, mp_randstate_t *s)
 {
     limb_t prec1;
-    prec1 = mp_random64(s) % (2 * prec) + 1;
+    prec1 = mp_msrand64() % (2 * prec) + 1;
     bf_rrandom(a, prec1, s);
-    a->sign = mp_random64(s) & 1;
+    a->sign = mp_msrand64() & 1;
 }
 
 /* random number between 0 and 1 with large sequences zeros, nines or
@@ -312,16 +368,17 @@ static void bfdec_rrandom(bfdec_t *a, limb_t prec, mp_randstate_t *state)
 {
     slimb_t n, max_run_len, cur_len, j, len, digit_index, nb_digits;
     int cur_state, m;
+    (void)state;
     
     n = (prec + LIMB_DIGITS - 1) / LIMB_DIGITS;
     bfdec_resize(a, n);
     
     /* same idea as GMP. It would be probably better to use a non
        uniform law */
-    m = mp_random64(state) % 4 + 1;
+    m = mp_msrand64() % 4 + 1;
     max_run_len = bf_max(prec / m, 1);
-    cur_state = mp_random64(state) % 3;
-    cur_len = mp_random64(state) % max_run_len + 1;
+    cur_state = mp_msrand64() % 3;
+    cur_len = mp_msrand64() % max_run_len + 1;
     nb_digits = n * LIMB_DIGITS;
     
     memset(a->tab, 0, sizeof(limb_t) * n);
@@ -344,7 +401,7 @@ static void bfdec_rrandom(bfdec_t *a, limb_t prec, mp_randstate_t *state)
             /* random */
             for(j = 0; j < len; j++) {
                 a->tab[digit_index / LIMB_DIGITS] +=
-                    (mp_random64(state) % 10) *
+                    (mp_msrand64() % 10) *
                     mp_pow_dec[digit_index % LIMB_DIGITS];
                 digit_index++;
             }
@@ -353,7 +410,7 @@ static void bfdec_rrandom(bfdec_t *a, limb_t prec, mp_randstate_t *state)
         digit_index += len;
         cur_len -= len;
         if (cur_len == 0) {
-            cur_len = mp_random64(state) % max_run_len + 1;
+            cur_len = mp_msrand64() % max_run_len + 1;
             cur_state ^= 1;
         }
     }
@@ -366,20 +423,20 @@ static void bfdec_rrandom_large(bfdec_t *a, limb_t prec, mp_randstate_t *s)
 {
     limb_t prec1;
     
-    prec1 = mp_random64(s) % (2 * prec) + 1;
+    prec1 = mp_msrand64() % (2 * prec) + 1;
     bfdec_rrandom(a, prec1, s);
-    a->sign = mp_random64(s) & 1;
+    a->sign = mp_msrand64() & 1;
 }
 
 /* random integer with 0 to prec bits */
 static void bf_rrandom_int(bf_t *a, limb_t prec, mp_randstate_t *rnd_state)
 {
     limb_t prec1;
-    prec1 = mp_random64(rnd_state) % prec + 1;
+    prec1 = mp_msrand64() % prec + 1;
     bf_rrandom(a, prec1, rnd_state);
     if (a->expn != BF_EXP_ZERO)
         a->expn += prec1;
-    a->sign = mp_random64(rnd_state) & 1;
+    a->sign = mp_msrand64() & 1;
 }
 
 /* random integer with long sequences of '0' and '1' */
@@ -387,12 +444,13 @@ uint64_t rrandom_u(int len, mp_randstate_t *s)
 {
     int bit, pos, n, end;
     uint64_t a;
+    (void)s;
     
-    bit = mp_random64(s) & 1;
+    bit = mp_msrand64() & 1;
     pos = 0;
     a = 0;
     for(;;) {
-        n = (mp_random64(s) % len) + 1;
+        n = (mp_msrand64() % len) + 1;
         end = pos + n;
         if (end > len)
             end = len;
@@ -415,18 +473,18 @@ uint64_t rrandom_sf64(mp_randstate_t *s)
 {
     uint32_t a_exp, a_sign;
     uint64_t a_mant;
-    a_sign = mp_random64(s) & 1;
+    a_sign = mp_msrand64() & 1;
 
     /* generate exponent close to the min/max more often than random */
-    switch(mp_random64(s) & 15) {
+    switch(mp_msrand64() & 15) {
     case 0:
-        a_exp = (mp_random64(s) % (2 * F64_MANT_SIZE)) & F64_EXP_MASK;
+        a_exp = (mp_msrand64() % (2 * F64_MANT_SIZE)) & F64_EXP_MASK;
         break;
     case 1:
-        a_exp = (F64_EXP_MASK - (mp_random64(s) % (2 * F64_MANT_SIZE))) & F64_EXP_MASK;
+        a_exp = (F64_EXP_MASK - (mp_msrand64() % (2 * F64_MANT_SIZE))) & F64_EXP_MASK;
         break;
     default:
-        a_exp = mp_random64(s) & F64_EXP_MASK;
+        a_exp = mp_msrand64() & F64_EXP_MASK;
         break;
     }
     a_mant = rrandom_u(F64_MANT_SIZE, s);
@@ -1021,18 +1079,18 @@ void test_atof(limb_t prec, int duration_ms,
     it = 0;
     for(;;) {
         /* build a random string representing a number */
-        if (mp_random64(&rnd_state) & 1)
-            radix = (mp_random64(&rnd_state) % 35) + 2;
+        if (mp_msrand64() & 1)
+            radix = (mp_msrand64() % 35) + 2;
         else
             radix = 10;
         prec1 = (limb_t)ceil(prec / log2(radix));
-        n_digits = mp_random64(&rnd_state) % (prec1 * 3) + 1;
+        n_digits = mp_msrand64() % (prec1 * 3) + 1;
         dbuf_init(&dbuf);
-        if (mp_random64(&rnd_state) & 1)
+        if (mp_msrand64() & 1)
             dbuf_putc(&dbuf, '-');
 
         for(i = 0; i < n_digits; i++) {
-            c = mp_random64(&rnd_state) % radix;
+            c = mp_msrand64() % radix;
             if (c < 10)
                 c += '0';
             else
@@ -1044,7 +1102,7 @@ void test_atof(limb_t prec, int duration_ms,
         else
             dbuf_putc(&dbuf, '@');
         e = prec1 * 20;
-        e = (mp_random64(&rnd_state) % (2 * e + 1)) - e;
+        e = (mp_msrand64() % (2 * e + 1)) - e;
         dbuf_printf(&dbuf, "%d", e);
         dbuf_putc(&dbuf, '\0');
         str = (char *)dbuf.buf;
@@ -1119,16 +1177,16 @@ void test_ftoa(limb_t prec, int duration_ms,
     it = 0;
     for(;;) {
         /* build a random string representing a number */
-        if ((mp_random64(&rnd_state) & 1) && 0)
-            radix = (mp_random64(&rnd_state) % 35) + 2;
+        if ((mp_msrand64() & 1) && 0)
+            radix = (mp_msrand64() % 35) + 2;
         else
             radix = 10;
         n_digits = (limb_t)ceil(prec / log2(radix));
-        prec1 = mp_random64(&rnd_state) % (3 * prec) + 2;
+        prec1 = mp_msrand64() % (3 * prec) + 2;
         bf_rrandom(&a, prec1, &rnd_state);
         e = prec * 20;
         if (a.expn != BF_EXP_ZERO)
-            a.expn += (mp_random64(&rnd_state) % (2 * e + 1)) - e;
+            a.expn += (mp_msrand64() % (2 * e + 1)) - e;
         ti -= get_cycles();
         r_str = bf_ftoa(NULL, &a, radix, n_digits, rnd_mode |
                         BF_FTOA_FORMAT_FIXED | BF_FTOA_FORCE_EXP);
@@ -1226,18 +1284,18 @@ void test_can_round(limb_t prec, int duration_ms, bf_rnd_t rnd_mode, int seed)
     test_loop = 1;
     it = 0;
     for(;;) {
-        prec1 = mp_random64(&rnd_state) % (3 * prec) + 2;
+        prec1 = mp_msrand64() % (3 * prec) + 2;
         bf_rrandom(&a, prec1, &rnd_state);
-        a.sign = mp_random64(&rnd_state) & 1;
+        a.sign = mp_msrand64() & 1;
 
-        k = prec + (mp_random64(&rnd_state) % 10);
+        k = prec + (mp_msrand64() % 10);
         bf_set(&a_rounded, &a);
         bf_round(&a_rounded, prec, rnd_mode);
         res = bf_can_round(&a, prec, rnd_mode, k);
         if (res) {
             for(i = 0; i < 100; i++) {
                 bf_rrandom(&c, prec1, &rnd_state);
-                c.sign = mp_random64(&rnd_state) & 1;
+                c.sign = mp_msrand64() & 1;
                 if (c.expn != BF_EXP_ZERO)
                     c.expn += a.expn - k;
                 
@@ -1296,7 +1354,7 @@ void test_mul_log2(int duration_ms, BOOL is_inv, BOOL is_ceil, int seed)
     it = 0;
     for(;;) {
         for(radix = 2; radix <= BF_RADIX_MAX; radix++) {
-            a = (mp_random64(&rnd_state) % (2 * v_max + 1)) - v_max;
+            a = (mp_msrand64() % (2 * v_max + 1)) - v_max;
             r = bf_mul_log2_radix(a, radix, is_inv, is_ceil);
             
             mpfr_set_si(a1, a, MPFR_RNDN);
@@ -1370,7 +1428,7 @@ void test_op_rm_dec(MPFTestOPEnum op, limb_t rprec, int duration_ms,
     it = 0;
     for(;;) {
         if (rprec == 0) {
-            prec = (mp_random64(&rnd_state) % 1000) + 24;
+            prec = (mp_msrand64() % 1000) + 24;
         } else {
             prec = rprec;
         }
@@ -1389,14 +1447,14 @@ void test_op_rm_dec(MPFTestOPEnum op, limb_t rprec, int duration_ms,
             } else {
                 limb_t prec1;
                 
-                prec1 = mp_random64(&rnd_state) % (3 * prec) + 1;
+                prec1 = mp_msrand64() % (3 * prec) + 1;
                 bfdec_rrandom(&a, prec1, &rnd_state);
                 if (a.expn != BF_EXP_ZERO)
                     a.expn += prec1 / 2;
                 if (op == BF_OP_SQRT_DEC) {
                     a.sign = 0;
                 } else {
-                    a.sign = mp_random64(&rnd_state) & 1;
+                    a.sign = mp_msrand64() & 1;
                 }
             }
         } else {
@@ -1509,7 +1567,7 @@ static void test_mp_sqrtrem(limb_t rprec, int duration_ms, int seed)
     start_time = get_clock_msec();
     ti = 0;
     for(;;) {
-        n = (mp_random64(&rnd_state) % n_max) + 1;
+        n = (mp_msrand64() % n_max) + 1;
 
         mp_rrandom(taba, 2 * n * LIMB_BITS, &rnd_state);
         taba[2 * n - 1] |= (limb_t)1 << (LIMB_BITS - 2);
@@ -1573,7 +1631,7 @@ static void test_mp_recip(limb_t rprec, int duration_ms, int seed)
     start_time = get_clock_msec();
     ti = 0;
     for(;;) {
-        n = (mp_random64(&rnd_state) % n_max) + 1;
+        n = (mp_msrand64() % n_max) + 1;
 
         mp_rrandom(taba, n * LIMB_BITS, &rnd_state);
         taba[n - 1] |= (limb_t)1 << (LIMB_BITS - 1);
@@ -1693,7 +1751,7 @@ void test_op_rm(MPFTestOPEnum op, limb_t rprec, int duration_ms,
     it_perf = 0;
     for(;;) {
         if (rprec == 0) {
-            prec = (mp_random64(&rnd_state) % 1000) + 24;
+            prec = (mp_msrand64() % 1000) + 24;
         } else {
             prec = rprec;
         }
@@ -1726,14 +1784,14 @@ void test_op_rm(MPFTestOPEnum op, limb_t rprec, int duration_ms,
                     u.u = rrandom_sf64(&rnd_state);
                     bf_set_float64(&a, u.d);
                 } else {
-                    prec1 = mp_random64(&rnd_state) % (3 * prec) + 1;
+                    prec1 = mp_msrand64() % (3 * prec) + 1;
                     bf_rrandom(&a, prec1, &rnd_state);
                     if (op == BF_OP_COS || op == BF_OP_SIN || op == BF_OP_TAN) {
                         int k;
                         bf_t c_s, *c = &c_s;
                         if (a.expn != BF_EXP_ZERO)
                             a.expn++;
-                        k = (mp_random64(&rnd_state) % 2000) - 1000;
+                        k = (mp_msrand64() % 2000) - 1000;
                         bf_init(&bf_ctx, c);
                         bf_const_pi(c, prec1 + 1, BF_RNDN);
                         c->expn--; /* pi/2 */
@@ -1749,7 +1807,7 @@ void test_op_rm(MPFTestOPEnum op, limb_t rprec, int duration_ms,
                 if (op == BF_OP_SQRT || op == BF_OP_LOG) {
                     a.sign = 0;
                 } else {
-                    a.sign = mp_random64(&rnd_state) & 1;
+                    a.sign = mp_msrand64() & 1;
                 }
             }
         } else if (op == BF_OP_OR ||
@@ -1765,7 +1823,7 @@ void test_op_rm(MPFTestOPEnum op, limb_t rprec, int duration_ms,
                 if (op == BF_OP_POW) {
                     bf_rrandom_large(&a, prec, &rnd_state);
                     if ((it % 10) == 0) {
-                        bf_set_si(&b, (int32_t)mp_random64(&rnd_state));
+                        bf_set_si(&b, (int32_t)mp_msrand64());
                     } else {
                         bf_rrandom_large(&b, prec, &rnd_state);
                     }
