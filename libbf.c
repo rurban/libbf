@@ -704,10 +704,12 @@ void mp_print_str(const char *str, const limb_t *tab, limb_t n)
 {
     slimb_t i;
     printf("%s= 0x", str);
-    for(i = n - 1; i >= 0; i--) {
-        if (i != (n - 1))
-            printf("_");
-        printf(FMT_LIMB, tab[i]);
+    if (n != 0) {
+        for(i = n - 1; i >= 0; i--) {
+            if (i != (n - 1))
+                printf("_");
+            printf(FMT_LIMB, tab[i]);
+        }
     }
     printf("\n");
 }
