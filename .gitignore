@@ -1,0 +1,39 @@
+bfbench
+bfbench.d
+bfbench.o
+bfcalc
+bfcalc.d
+bfcalc.o
+bfpi
+bfpi.d
+bfpi.o
+cutils.d
+cutils.o
+libbf.d
+libbf.o
+readline.d
+readline.o
+readline_tty.d
+readline_tty.o
+# CONFIG_BFTEST=y
+bftest
+bftest.d
+bftest.o
+softfp.d
+softfp.o
+TAGS
+# test
+pi_1e5.txt
+pi_1e6.txt
+# CONFIG_AVX2=y
+bfbench-avx2
+bfbench.avx2.d
+bfbench.avx2.o
+bfpi-avx2
+bfpi.avx2.d
+bfpi.avx2.o
+cutils.avx2.d
+cutils.avx2.o
+libbf.avx2.d
+libbf.avx2.o
+pi_1e7.txt
